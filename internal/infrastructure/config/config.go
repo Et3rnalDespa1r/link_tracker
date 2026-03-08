@@ -10,6 +10,7 @@ import (
 type Config struct {
 	TelegramToken string `env:"APP_TELEGRAM_TOKEN,required"`
 	BotTimeout    int    `env:"BOT_TIMEOUT" envDefault:"60"`
+	BotAddress    string `env:"BOT_ADDRESS" envDefault:":8080"`
 }
 
 func Load() (*Config, error) {

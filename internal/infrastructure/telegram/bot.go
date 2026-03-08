@@ -21,6 +21,7 @@ type Bot struct {
 	api     BotAPI
 	logger  *slog.Logger
 	timeout int
+	app     *application.BotService
 }
 
 func NewBot(token string, timeout int, logger *slog.Logger) (*Bot, error) {
@@ -34,6 +35,10 @@ func NewBot(token string, timeout int, logger *slog.Logger) (*Bot, error) {
 		logger:  logger,
 		timeout: timeout,
 	}, nil
+}
+
+func (b *Bot) SetService(app *application.BotService) {
+	b.app = app
 }
 
 func (b *Bot) SetupCommands() error {
@@ -57,19 +62,18 @@ func (b *Bot) Start(ctx context.Context) {
 	u.Timeout = b.timeout
 
 	updates := b.api.GetUpdatesChan(u)
-
 	b.logger.Info("Начинаю прослушивание обновлений...")
 
 	for {
 		select {
 		case <-ctx.Done():
-			b.logger.Info("Завершение работы бота (Graceful Shutdown)...")
+			b.logger.Info("Завершение работы Telegram-клиента...")
 			return
 		case update, ok := <-updates:
 			if !ok {
 				return
 			}
-			if update.Message == nil || !update.Message.IsCommand() {
+			if update.Message == nil {
 				continue
 			}
 			b.handleMessage(update.Message)
@@ -78,20 +82,32 @@ func (b *Bot) Start(ctx context.Context) {
 }
 
 func (b *Bot) handleMessage(msg *tgbotapi.Message) {
-	b.logger.Info("Получена команда",
+	b.logger.Info("Получено сообщение",
 		slog.String("user", msg.From.UserName),
-		slog.String("command", msg.Command()),
+		slog.String("text", msg.Text),
 		slog.Int("message_id", msg.MessageID),
 	)
 
-	replyText := application.RouteCommand(msg.Command())
+	if b.app == nil {
+		return
+	}
 
-	b.sendMessage(msg.Chat.ID, replyText)
+	var replyText string
+	ctx := context.Background()
+
+	if msg.IsCommand() {
+		replyText = b.app.HandleCommand(ctx, msg.Chat.ID, msg.Command(), msg.CommandArguments())
+	} else {
+		replyText = b.app.HandleText(ctx, msg.Chat.ID, msg.Text)
+	}
+
+	if err := b.SendMessage(msg.Chat.ID, replyText); err != nil {
+		b.logger.Error("Ошибка при отправке ответа", slog.Any("error", err))
+	}
 }
 
-func (b *Bot) sendMessage(chatID int64, text string) {
+func (b *Bot) SendMessage(chatID int64, text string) error {
 	reply := tgbotapi.NewMessage(chatID, text)
-	if _, err := b.api.Send(reply); err != nil {
-		b.logger.Error("Ошибка при отправке сообщения", slog.Any("error", err))
-	}
+	_, err := b.api.Send(reply)
+	return err
 }
