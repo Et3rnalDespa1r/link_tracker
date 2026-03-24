@@ -73,6 +73,9 @@ func (s *BotService) HandleCommand(ctx context.Context, chatID int64, command, a
 	case CmdCancel:
 		return ReplyCancel
 	case CmdTrack:
+		if args != "" {
+			return s.processLinkInput(ctx, chatID, args)
+		}
 		s.states[chatID] = domain.StateWaitingForLink
 		return "Отправьте ссылку, которую хотите отслеживать (или /cancel для отмены):"
 	case CmdUntrack:

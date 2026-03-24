@@ -8,10 +8,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/application"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/config"
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/db"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/http"
-	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/repository"
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/repository/postgres"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/telegram"
 )
 
@@ -27,7 +29,29 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	repo := repository.NewInMemoryLinkRepository()
+	if err := db.RunMigrations(cfg.DatabaseDSN, logger); err != nil {
+		logger.Error("Ошибка при запуске миграций", slog.Any("error", err))
+		os.Exit(1)
+	}
+
+	pool, err := pgxpool.New(ctx, cfg.DatabaseDSN)
+	if err != nil {
+		logger.Error("Ошибка подключения к БД", slog.Any("error", err))
+		os.Exit(1)
+	}
+	defer pool.Close()
+
+	var repo application.LinkRepository
+	if cfg.AccessType == "SQL" {
+		repo = postgres.NewSqlLinkRepository(pool)
+		logger.Info("Используется Raw SQL репозиторий")
+	} else if cfg.AccessType == "ORM" {
+		repo = postgres.NewBuilderLinkRepository(pool)
+		logger.Info("Используется Query Builder (ORM) репозиторий")
+	} else {
+		logger.Error("Неизвестный тип доступа к БД", slog.String("ACCESS_TYPE", cfg.AccessType))
+		os.Exit(1)
+	}
 
 	tgBot, err := telegram.NewBot(cfg.TelegramToken, cfg.BotTimeout, logger)
 	if err != nil {

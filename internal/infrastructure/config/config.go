@@ -11,6 +11,9 @@ type Config struct {
 	TelegramToken string `env:"APP_TELEGRAM_TOKEN,required"`
 	BotTimeout    int    `env:"BOT_TIMEOUT" envDefault:"60"`
 	BotAddress    string `env:"BOT_ADDRESS" envDefault:":8080"`
+
+	DatabaseDSN string `env:"DATABASE_DSN" envDefault:"postgres://postgres:password@localhost:5432/linktracker?sslmode=disable"`
+	AccessType  string `env:"ACCESS_TYPE" envDefault:"SQL"` // Может быть SQL или ORM
 }
 
 func Load() (*Config, error) {
