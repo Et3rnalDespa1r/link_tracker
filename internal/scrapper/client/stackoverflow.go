@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 )
@@ -43,7 +44,8 @@ func (c *StackOverflowClient) FetchQuestion(ctx context.Context, id int64) (*Sta
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode, string(bodyBytes))
 	}
 
 	var result StackOverflowResponse

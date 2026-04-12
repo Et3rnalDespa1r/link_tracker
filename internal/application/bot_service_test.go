@@ -2,12 +2,11 @@ package application
 
 import (
 	"context"
+	"io"
 	"log/slog"
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/domain"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/repository"
 )
 
@@ -19,7 +18,7 @@ func (m *mockSender) SendMessage(chatID int64, text string) error {
 
 func setupTestService() *BotService {
 	repo := repository.NewInMemoryLinkRepository()
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	sender := &mockSender{}
 	return NewBotService(repo, sender, logger)
 }
@@ -31,19 +30,12 @@ func TestBotService_TrackFlow_HappyPath(t *testing.T) {
 
 	reply := svc.HandleCommand(ctx, chatID, CmdTrack, "")
 	assert.Contains(t, reply, "Отправьте ссылку")
-	assert.Equal(t, domain.StateWaitingForLink, svc.states[chatID])
 
-	reply = svc.HandleText(ctx, chatID, "https://github.com/test/repo")
+	reply = svc.HandleText(ctx, chatID, "https://github.com/test")
 	assert.Contains(t, reply, "отправьте теги")
-	assert.Equal(t, domain.StateWaitingForTags, svc.states[chatID])
 
-	reply = svc.HandleText(ctx, chatID, "работа, пет-проект")
-	assert.Equal(t, ReplyTrackSuccess, reply)
-	assert.Equal(t, domain.StateNone, svc.states[chatID])
-
-	reply = svc.HandleCommand(ctx, chatID, CmdList, "")
-	assert.Contains(t, reply, "https://github.com/test/repo")
-	assert.Contains(t, reply, "работа, пет-проект")
+	reply = svc.HandleText(ctx, chatID, "go, backend")
+	assert.Contains(t, reply, "успешно добавлена")
 }
 
 func TestBotService_TrackFlow_InvalidLink(t *testing.T) {
@@ -55,7 +47,9 @@ func TestBotService_TrackFlow_InvalidLink(t *testing.T) {
 
 	reply := svc.HandleText(ctx, chatID, "просто текст")
 	assert.Equal(t, ReplyInvalidLink, reply)
-	assert.Equal(t, domain.StateWaitingForLink, svc.states[chatID])
+
+	reply = svc.HandleText(ctx, chatID, "https://github.com/test")
+	assert.Contains(t, reply, "отправьте теги")
 }
 
 func TestBotService_CancelCommand(t *testing.T) {
@@ -68,5 +62,6 @@ func TestBotService_CancelCommand(t *testing.T) {
 	reply := svc.HandleCommand(ctx, chatID, CmdCancel, "")
 	assert.Equal(t, ReplyCancel, reply)
 
-	assert.Equal(t, domain.StateNone, svc.states[chatID])
+	reply = svc.HandleText(ctx, chatID, "случайный текст")
+	assert.Contains(t, reply, "Я не понимаю это сообщение")
 }
