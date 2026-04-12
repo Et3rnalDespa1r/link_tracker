@@ -55,7 +55,7 @@ func (s *BotService) Notify(ctx context.Context, update domain.LinkUpdate) error
 	for _, chatID := range update.TgChatIDs {
 		msg := fmt.Sprintf("🔔 Обновление по ссылке: %s\n%s", update.URL, update.Description)
 		if err := s.sender.SendMessage(chatID, msg); err != nil {
-			s.logger.Error("Не удалось отправить уведомление", slog.Int64("chat_id", chatID), slog.Any("error", err))
+			s.logger.Error("Не удалось отправить уведомление", "chat_id", chatID, "error", err)
 		}
 	}
 	return nil
@@ -79,7 +79,10 @@ func (s *BotService) HandleCommand(ctx context.Context, chatID int64, command, a
 		if args == "" {
 			return "Укажите ссылку для удаления. Пример: /untrack https://github.com/..."
 		}
-		_ = s.repo.RemoveLink(ctx, chatID, args)
+		if err := s.repo.RemoveLink(ctx, chatID, args); err != nil {
+			s.logger.Error("Ошибка при удалении ссылки", "err", err)
+			return "Произошла внутренняя ошибка при удалении ссылки. Попробуйте позже."
+		}
 		return "Ссылка удалена из отслеживаемых."
 	case CmdList:
 		return s.handleList(ctx, chatID, args)
@@ -107,7 +110,11 @@ func (s *BotService) processLinkInput(ctx context.Context, chatID int64, text st
 		return ReplyInvalidLink
 	}
 
-	exists, _ := s.repo.HasLink(ctx, chatID, text)
+	exists, err := s.repo.HasLink(ctx, chatID, text)
+	if err != nil {
+		s.logger.Error("Ошибка при проверке существования ссылки", "err", err)
+		return "Произошла ошибка при обращении к базе данных. Попробуйте позже."
+	}
 	if exists {
 		s.states[chatID] = domain.StateNone
 		return ReplyAlreadyTrack
@@ -129,7 +136,10 @@ func (s *BotService) processTagsInput(ctx context.Context, chatID int64, text st
 		}
 	}
 
-	_ = s.repo.AddLink(ctx, chatID, domain.Link{URL: linkURL, Tags: tags})
+	if err := s.repo.AddLink(ctx, chatID, domain.Link{URL: linkURL, Tags: tags}); err != nil {
+		s.logger.Error("Ошибка при сохранении ссылки", "err", err)
+		return "Не удалось сохранить ссылку из-за внутренней ошибки."
+	}
 
 	s.states[chatID] = domain.StateNone
 	delete(s.tempLinks, chatID)
@@ -138,7 +148,11 @@ func (s *BotService) processTagsInput(ctx context.Context, chatID int64, text st
 }
 
 func (s *BotService) handleList(ctx context.Context, chatID int64, tagFilter string) string {
-	links, _ := s.repo.GetLinks(ctx, chatID)
+	links, err := s.repo.GetLinks(ctx, chatID)
+	if err != nil {
+		s.logger.Error("Ошибка при получении списка ссылок", "err", err)
+		return "Не удалось загрузить список ссылок. Попробуйте позже."
+	}
 	if len(links) == 0 {
 		return ReplyNoLinks
 	}
