@@ -10,7 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/application"
-	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/config"
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/config"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/db"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/http"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/repository/postgres"
@@ -29,12 +29,12 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := db.RunMigrations(cfg.DatabaseDSN, logger); err != nil {
+	if err := db.RunMigrations(cfg.DatabaseDSN(), logger); err != nil {
 		logger.Error("Ошибка при запуске миграций", slog.Any("error", err))
 		os.Exit(1)
 	}
 
-	pool, err := pgxpool.New(ctx, cfg.DatabaseDSN)
+	pool, err := pgxpool.New(ctx, cfg.DatabaseDSN())
 	if err != nil {
 		logger.Error("Ошибка подключения к БД", slog.Any("error", err))
 		os.Exit(1)

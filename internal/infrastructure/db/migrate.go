@@ -10,11 +10,14 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 )
 
+const migrationsPath = "file://migrations"
+
 func RunMigrations(dsn string, logger *slog.Logger) error {
 	logger.Info("Запуск миграций базы данных...")
 
-	m, err := migrate.New("file://migrations", dsn)
+	m, err := migrate.New(migrationsPath, dsn)
 	if err != nil {
+
 		return fmt.Errorf("ошибка инициализации миграций: %w", err)
 	}
 	defer m.Close()

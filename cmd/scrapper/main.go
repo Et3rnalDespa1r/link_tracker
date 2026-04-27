@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/go-co-op/gocron"
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/config"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/client"
-	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/config"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/http"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/updater"
 )
