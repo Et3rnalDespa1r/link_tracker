@@ -57,7 +57,7 @@ func (b *Bot) SetupCommands() error {
 	return nil
 }
 
-func (b *Bot) Start(ctx context.Context) {
+func (b *Bot) Start(ctx context.Context) error {
 	u := tgbotapi.NewUpdate(updateOffset)
 	u.Timeout = b.timeout
 
@@ -68,20 +68,20 @@ func (b *Bot) Start(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			b.logger.Info("Завершение работы Telegram-клиента...")
-			return
+			return nil
 		case update, ok := <-updates:
 			if !ok {
-				return
+				return fmt.Errorf("updates channel closed unexpectedly")
 			}
 			if update.Message == nil {
 				continue
 			}
-			b.handleMessage(update.Message)
+			b.handleMessage(ctx, update.Message)
 		}
 	}
 }
 
-func (b *Bot) handleMessage(msg *tgbotapi.Message) {
+func (b *Bot) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 	b.logger.Info("Получено сообщение",
 		slog.String("user", msg.From.UserName),
 		slog.String("text", msg.Text),
@@ -93,7 +93,6 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 	}
 
 	var replyText string
-	ctx := context.Background()
 
 	if msg.IsCommand() {
 		replyText = b.app.HandleCommand(ctx, msg.Chat.ID, msg.Command(), msg.CommandArguments())
@@ -102,7 +101,7 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 	}
 
 	if err := b.SendMessage(msg.Chat.ID, replyText); err != nil {
-		b.logger.Error("Ошибка при отправке ответа", slog.Any("error", err))
+		b.logger.Error("Ошибка при отправке ответа", "err", err)
 	}
 }
 

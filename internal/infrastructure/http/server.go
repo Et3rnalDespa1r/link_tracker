@@ -36,7 +36,7 @@ func NewBotServer(address string, notifier UpdateNotifier, logger *slog.Logger) 
 }
 
 func (s *BotServer) Start() error {
-	s.logger.Info("Запуск HTTP сервера бота", slog.String("address", s.srv.Addr))
+	s.logger.Info("Запуск HTTP сервера бота", "address", s.srv.Addr)
 	if err := s.srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("http server error: %w", err)
 	}
@@ -56,7 +56,7 @@ func (s *BotServer) handleUpdates(w http.ResponseWriter, r *http.Request) {
 
 	var update domain.LinkUpdate
 	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
-		s.logger.Error("Ошибка декодирования запроса", slog.Any("error", err))
+		s.logger.Error("Ошибка декодирования запроса", "error", err)
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
 	}
@@ -67,7 +67,7 @@ func (s *BotServer) handleUpdates(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.notifier.Notify(r.Context(), update); err != nil {
-		s.logger.Error("Ошибка обработки обновления", slog.Any("error", err))
+		s.logger.Error("Ошибка обработки обновления", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
