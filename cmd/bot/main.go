@@ -49,7 +49,7 @@ func main() {
 		repo = postgres.NewSqlLinkRepository(pool)
 		logger.Info("Используется Raw SQL репозиторий")
 	} else if cfg.AccessType == "ORM" {
-		repo = postgres.NewBuilderLinkRepository(pool)
+		repo = postgres.NewSqlLinkRepository(pool)
 		logger.Info("Используется Query Builder (ORM) репозиторий")
 	} else {
 		logger.Error("Неизвестный тип доступа к БД", slog.String("ACCESS_TYPE", cfg.AccessType))

@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/domain"
@@ -118,4 +119,58 @@ func (r *SqlLinkRepository) HasLink(ctx context.Context, chatID int64, url strin
 	`
 	err := r.pool.QueryRow(ctx, query, chatID, url).Scan(&exists)
 	return exists, err
+}
+
+func (r *SqlLinkRepository) GetLinksToCheck(ctx context.Context, limit int, before time.Time) ([]domain.Link, error) {
+	query := `
+		SELECT id, url, last_check_time, updated_at 
+		FROM links 
+		WHERE last_check_time < $1 
+		ORDER BY last_check_time ASC 
+		LIMIT $2
+	`
+	rows, err := r.pool.Query(ctx, query, before, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var links []domain.Link
+	for rows.Next() {
+		var l domain.Link
+		if err := rows.Scan(&l.ID, &l.URL, &l.LastCheckTime, &l.UpdatedAt); err != nil {
+			return nil, err
+		}
+		links = append(links, l)
+	}
+	return links, rows.Err()
+}
+
+func (r *SqlLinkRepository) UpdateLink(ctx context.Context, link domain.Link) error {
+	query := `
+		UPDATE links 
+		SET last_check_time = $1, updated_at = $2 
+		WHERE id = $3
+	`
+	_, err := r.pool.Exec(ctx, query, link.LastCheckTime, link.UpdatedAt, link.ID)
+	return err
+}
+
+func (r *SqlLinkRepository) GetChatIDsForLink(ctx context.Context, linkID int64) ([]int64, error) {
+	query := `SELECT chat_id FROM subscriptions WHERE link_id = $1`
+	rows, err := r.pool.Query(ctx, query, linkID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var chatIDs []int64
+	for rows.Next() {
+		var chatID int64
+		if err := rows.Scan(&chatID); err != nil {
+			return nil, err
+		}
+		chatIDs = append(chatIDs, chatID)
+	}
+	return chatIDs, rows.Err()
 }

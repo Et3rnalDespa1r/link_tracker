@@ -1,8 +1,13 @@
 package domain
 
+import "time"
+
 type Link struct {
-	URL  string
-	Tags []string
+	ID            int64
+	URL           string
+	Tags          []string
+	LastCheckTime time.Time
+	UpdatedAt     time.Time
 }
 
 type UserState string

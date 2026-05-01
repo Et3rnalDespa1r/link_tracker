@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/caarlos0/env/v11"
 	"github.com/joho/godotenv"
@@ -21,6 +22,12 @@ type Config struct {
 	DBPassword string `env:"DB_PASSWORD,required"`
 	DBName     string `env:"DB_NAME" envDefault:"linktracker"`
 	AccessType string `env:"ACCESS_TYPE" envDefault:"SQL"`
+
+	BatchSize     int           `env:"BATCH_SIZE" envDefault:"100"`
+	WorkerCount   int           `env:"WORKER_COUNT" envDefault:"4"`
+	CheckInterval time.Duration `env:"CHECK_INTERVAL" envDefault:"5m"`
+
+	GithubToken string `env:"GITHUB_TOKEN"`
 }
 
 func (c *Config) DatabaseDSN() string {
