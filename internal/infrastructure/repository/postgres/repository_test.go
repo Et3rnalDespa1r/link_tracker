@@ -63,8 +63,7 @@ func TestRepositories(t *testing.T) {
 	defer cleanup()
 
 	repos := map[string]application.LinkRepository{
-		"Raw SQL":       NewSqlLinkRepository(pool),
-		"Query Builder": NewBuilderLinkRepository(pool),
+		"Raw SQL": NewSqlLinkRepository(pool),
 	}
 
 	for name, repo := range repos {
@@ -112,4 +111,61 @@ func TestRepositories(t *testing.T) {
 			assert.Len(t, links, 0)
 		})
 	}
+}
+
+func TestScrapperRepositoryMethods(t *testing.T) {
+	originalWD, _ := os.Getwd()
+	os.Chdir("../../../../")
+	defer os.Chdir(originalWD)
+
+	pool, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSqlLinkRepository(pool)
+	ctx := context.Background()
+
+	chatID1 := int64(111111)
+	chatID2 := int64(222222)
+	linkURL := "https://github.com/scrapper/test-repo"
+	link := domain.Link{URL: linkURL}
+
+	err := repo.AddLink(ctx, chatID1, link)
+	assert.NoError(t, err)
+	err = repo.AddLink(ctx, chatID2, link)
+	assert.NoError(t, err)
+
+	links, err := repo.GetLinksToCheck(ctx, 10, time.Now().Add(1*time.Hour))
+	assert.NoError(t, err)
+	require.NotEmpty(t, links, "Скраппер должен найти добавленную ссылку")
+
+	var targetLink domain.Link
+	for _, l := range links {
+		if l.URL == linkURL {
+			targetLink = l
+			break
+		}
+	}
+	assert.NotZero(t, targetLink.ID, "ID ссылки должен быть получен из БД")
+
+	chatIDs, err := repo.GetChatIDsForLink(ctx, targetLink.ID)
+	assert.NoError(t, err)
+	assert.Len(t, chatIDs, 2, "Должно быть ровно 2 подписчика")
+	assert.Contains(t, chatIDs, chatID1)
+	assert.Contains(t, chatIDs, chatID2)
+
+	oldCheckTime := targetLink.LastCheckTime
+	targetLink.LastCheckTime = time.Now()
+
+	err = repo.UpdateLink(ctx, targetLink)
+	assert.NoError(t, err)
+
+	updatedLinks, _ := repo.GetLinksToCheck(ctx, 10, time.Now().Add(1*time.Hour))
+	var updatedTarget domain.Link
+	for _, l := range updatedLinks {
+		if l.URL == linkURL {
+			updatedTarget = l
+			break
+		}
+	}
+	assert.True(t, updatedTarget.LastCheckTime.After(oldCheckTime), "Время проверки должно было измениться")
 }

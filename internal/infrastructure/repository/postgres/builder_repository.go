@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"time"
 
 	"github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -134,4 +135,63 @@ func (r *BuilderLinkRepository) HasLink(ctx context.Context, chatID int64, url s
 		return false, err
 	}
 	return true, nil
+}
+
+func (r *BuilderLinkRepository) GetLinksToCheck(ctx context.Context, limit int, before time.Time) ([]domain.Link, error) {
+	query, args, _ := r.psql.Select("id", "url", "last_check_time", "updated_at").
+		From("links").
+		Where(squirrel.Lt{"last_check_time": before}).
+		OrderBy("last_check_time ASC").
+		Limit(uint64(limit)).
+		ToSql()
+
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var links []domain.Link
+	for rows.Next() {
+		var l domain.Link
+		if err := rows.Scan(&l.ID, &l.URL, &l.LastCheckTime, &l.UpdatedAt); err != nil {
+			return nil, err
+		}
+		links = append(links, l)
+	}
+	return links, rows.Err()
+}
+
+func (r *BuilderLinkRepository) UpdateLink(ctx context.Context, link domain.Link) error {
+	query, args, _ := r.psql.Update("links").
+		Set("last_check_time", link.LastCheckTime).
+		Set("updated_at", link.UpdatedAt).
+		Where(squirrel.Eq{"id": link.ID}).
+		ToSql()
+
+	_, err := r.pool.Exec(ctx, query, args...)
+	return err
+}
+
+func (r *BuilderLinkRepository) GetChatIDsForLink(ctx context.Context, linkID int64) ([]int64, error) {
+	query, args, _ := r.psql.Select("chat_id").
+		From("subscriptions").
+		Where(squirrel.Eq{"link_id": linkID}).
+		ToSql()
+
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var chatIDs []int64
+	for rows.Next() {
+		var chatID int64
+		if err := rows.Scan(&chatID); err != nil {
+			return nil, err
+		}
+		chatIDs = append(chatIDs, chatID)
+	}
+	return chatIDs, rows.Err()
 }
