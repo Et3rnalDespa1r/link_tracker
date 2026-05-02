@@ -13,6 +13,7 @@ import (
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/config"
 	coreDomain "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/domain"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/client"
+	scrapperDomain "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/domain"
 )
 
 type MockRepo struct {
@@ -27,6 +28,9 @@ func (m *MockRepo) GetChatIDsForLink(ctx context.Context, linkID int64) ([]int64
 	return []int64{111}, nil
 }
 
+func (m *MockRepo) UpdateLinkAndSaveOutbox(ctx context.Context, link coreDomain.Link, update scrapperDomain.LinkUpdate) error {
+	return m.UpdateLink(ctx, link)
+}
 func TestUpdater_ProcessUpdates_ErrorIsolation(t *testing.T) {
 	updatesSent := 0
 	mockBot := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
