@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// 1. Mock GitHub API возвращает новый Issue
 func TestGithubClient_FetchLatestEvent(t *testing.T) {
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -39,7 +38,6 @@ func TestGithubClient_FetchLatestEvent(t *testing.T) {
 	assert.Equal(t, "daniil", detail.Author)
 }
 
-// 2. Mock StackOverflow API возвращает новый ответ
 func TestStackOverflowClient_FetchLatestAnswer(t *testing.T) {
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -64,21 +62,19 @@ func TestStackOverflowClient_FetchLatestAnswer(t *testing.T) {
 	assert.Equal(t, "SO_User", detail.Author)
 }
 
-// 3. Mock внешнего API имитирует недоступность (500 Internal Server Error)
 func TestClient_APIFailure(t *testing.T) {
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError) // Сервер упал
+		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer mockServer.Close()
 
 	client := NewGithubClient(mockServer.URL, "")
 	detail, err := client.FetchLatestEvent(context.Background(), "owner", "repo", time.Now())
 
-	assert.Error(t, err) // Ожидаем ошибку
+	assert.Error(t, err)
 	assert.Nil(t, detail)
 }
 
-// 4. Текст превью длиннее 200 символов обрезается
 func TestTruncateText(t *testing.T) {
 	longText := strings.Repeat("А", 300)
 	result := truncateText(longText, 200)

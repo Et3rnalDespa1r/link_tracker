@@ -50,18 +50,15 @@ func TestUpdater_ProcessUpdates_ErrorIsolation(t *testing.T) {
 
 	repo := &MockRepo{
 		links: []coreDomain.Link{
-			{ID: 1, URL: "https://github.com/owner/fail"},    // Упадет с ошибкой
-			{ID: 2, URL: "https://github.com/owner/success"}, // Пройдет успешно
+			{ID: 1, URL: "https://github.com/owner/fail"},
+			{ID: 2, URL: "https://github.com/owner/success"},
 		},
 	}
 
 	cfg := &config.Config{BatchSize: 2, WorkerCount: 2}
 
-	// Вызываем тестируемый сервис
 	svc := NewUpdater(botClient, repo, cfg, slog.Default(), ghClient, soClient)
 	svc.ProcessUpdates(context.Background())
 
-	// Проверяем результат: несмотря на то, что первая ссылка упала,
-	// скраппер не крашнулся, изолировал ошибку, и вторая ссылка долетела до бота.
 	assert.Equal(t, 1, updatesSent, "Должно быть отправлено ровно 1 успешное обновление")
 }

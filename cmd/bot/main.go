@@ -73,33 +73,23 @@ func main() {
 	if cfg.UseKafka {
 		groupID := "link-tracker-bot-group"
 		schemaRegistryURL := "http://localhost:8081"
+		dlqTopic := cfg.KafkaTopic + ".dlq"
+		retries := 3
 
 		kafkaConsumer := kafka.NewConsumer(
 			cfg.KafkaBrokers,
 			cfg.KafkaTopic,
+			dlqTopic,
 			groupID,
-			schemaRegistryURL,
 			logger,
+			retries,
+			tgBot,
+			schemaRegistryURL,
 		)
 
 		go func() {
 			defer kafkaConsumer.Close()
-			for {
-				update, err := kafkaConsumer.FetchUpdate(ctx)
-				if err != nil {
-					if ctx.Err() != nil {
-						return
-					}
-					logger.Error("Ошибка получения обновления", "err", err)
-					continue
-				}
-
-				logger.Info("Получено Avro обновление!", "url", update.URL)
-
-				if err := botService.Notify(ctx, update); err != nil {
-					logger.Error("Ошибка при отправке обновления пользователям", "err", err)
-				}
-			}
+			kafkaConsumer.Start(ctx)
 		}()
 
 		logger.Info("Бот слушает обновления через Kafka (Avro)", slog.Any("brokers", cfg.KafkaBrokers))

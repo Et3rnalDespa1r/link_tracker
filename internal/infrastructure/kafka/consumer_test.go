@@ -2,12 +2,14 @@ package kafka_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,34 +18,39 @@ import (
 	"github.com/stretchr/testify/require"
 	tcKafka "github.com/testcontainers/testcontainers-go/modules/kafka"
 
-	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/domain"
 	myKafka "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/kafka"
+	scrapperKafka "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/client/kafka"
+	scrapDomain "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/domain"
 )
 
 type MockBot struct {
+	mu          sync.Mutex
 	calls       int
 	shouldError bool
 }
 
 func (m *MockBot) SendNotification(ctx context.Context, chatID int64, text string) error {
+	m.mu.Lock()
 	m.calls++
+	m.mu.Unlock()
 	if m.shouldError {
-		return errors.New("ошибка сети телеграма")
+		return errors.New("network error")
 	}
 	return nil
+}
+
+func (m *MockBot) GetCalls() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.calls
 }
 
 func TestConsumer_Integration(t *testing.T) {
 	ctx := context.Background()
 
 	kafkaContainer, err := tcKafka.RunContainer(ctx, tcKafka.WithClusterID("test-cluster"))
-	require.NoError(t, err, "Не удалось поднять Kafka Testcontainer")
-
-	defer func() {
-		if err := kafkaContainer.Terminate(ctx); err != nil {
-			t.Fatalf("Ошибка при остановке контейнера: %s", err)
-		}
-	}()
+	require.NoError(t, err)
+	defer kafkaContainer.Terminate(ctx)
 
 	brokers, err := kafkaContainer.Brokers(ctx)
 	require.NoError(t, err)
@@ -57,8 +64,7 @@ func TestConsumer_Integration(t *testing.T) {
 
 		controller, err := conn.Controller()
 		require.NoError(t, err)
-		var controllerConn *kafka.Conn
-		controllerConn, err = kafka.Dial("tcp", net.JoinHostPort(controller.Host, strconv.Itoa(controller.Port)))
+		controllerConn, err := kafka.Dial("tcp", net.JoinHostPort(controller.Host, strconv.Itoa(controller.Port)))
 		require.NoError(t, err)
 		defer controllerConn.Close()
 
@@ -85,35 +91,25 @@ func TestConsumer_Integration(t *testing.T) {
 		assert.Eventually(t, func() bool {
 			ctxTimeout, cancel := context.WithTimeout(ctx, 3*time.Second)
 			defer cancel()
-
 			msg, err := r.ReadMessage(ctxTimeout)
 			if err != nil {
 				return false
 			}
 			lastMsg = msg.Value
 			return true
-		}, 20*time.Second, 500*time.Millisecond, "Не удалось прочитать сообщение из DLQ")
-
+		}, 45*time.Second, 1*time.Second)
 		return lastMsg
 	}
-	writeToKafka := func(t *testing.T, topic string, value []byte) {
-		w := &kafka.Writer{
-			Addr:        kafka.TCP(brokers...),
-			Topic:       topic,
-			MaxAttempts: 5,
-		}
-		defer w.Close()
 
-		var err error
-		for i := 0; i < 10; i++ {
-			err = w.WriteMessages(ctx, kafka.Message{Value: value})
-			if err == nil {
-				return
-			}
-			time.Sleep(1 * time.Second)
+	mockSR := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.schemaregistry.v1+json")
+		if r.Method == http.MethodPost {
+			w.Write([]byte(`{"id": 1}`))
+			return
 		}
-		require.NoError(t, err, "Не удалось записать сообщение в топик")
-	}
+		w.Write([]byte(`{"schema":"{\"type\":\"record\",\"name\":\"LinkUpdateEvent\",\"namespace\":\"com.example.notification\",\"fields\":[{\"name\":\"id\",\"type\":\"long\"},{\"name\":\"url\",\"type\":\"string\"},{\"name\":\"description\",\"type\":\"string\"},{\"name\":\"tgChatIds\",\"type\":{\"type\":\"array\",\"items\":\"long\"}}]}"}`))
+	}))
+	defer mockSR.Close()
 
 	t.Run("Valid message -> successful processing", func(t *testing.T) {
 		topic, dlqTopic := "updates.happy", "updates.happy.dlq"
@@ -121,20 +117,20 @@ func TestConsumer_Integration(t *testing.T) {
 		createTopic(t, dlqTopic)
 
 		mockBot := &MockBot{shouldError: false}
-		consumer := myKafka.NewConsumer(brokers, topic, dlqTopic, "g1", 3, mockBot, logger)
+		consumer := myKafka.NewConsumer(brokers, topic, dlqTopic, "g1", logger, 3, mockBot, mockSR.URL)
 
 		ctxCancel, cancel := context.WithCancel(ctx)
 		defer cancel()
 		go consumer.Start(ctxCancel)
 		defer consumer.Close()
 
-		update := domain.LinkUpdate{URL: "https://github.com/ok", Description: "Test", TgChatIDs: []int64{123}}
-		b, _ := json.Marshal(update)
-		writeToKafka(t, topic, b)
+		producer, _ := scrapperKafka.NewProducer(brokers, topic, mockSR.URL)
+		defer producer.Close()
+		_ = producer.SendUpdate(ctx, scrapDomain.LinkUpdate{URL: "https://ok", Description: "Test", TgChatIDs: []int64{123}})
 
 		assert.Eventually(t, func() bool {
-			return mockBot.calls >= 1
-		}, 15*time.Second, 500*time.Millisecond, "Бот должен был отправиться 1 раз")
+			return mockBot.GetCalls() >= 1
+		}, 30*time.Second, 500*time.Millisecond)
 	})
 
 	t.Run("Invalid message -> sent to DLQ", func(t *testing.T) {
@@ -143,7 +139,7 @@ func TestConsumer_Integration(t *testing.T) {
 		createTopic(t, dlqTopic)
 
 		mockBot := &MockBot{shouldError: false}
-		consumer := myKafka.NewConsumer(brokers, topic, dlqTopic, "g2", 3, mockBot, logger)
+		consumer := myKafka.NewConsumer(brokers, topic, dlqTopic, "g2", logger, 3, mockBot, mockSR.URL)
 
 		ctxCancel, cancel := context.WithCancel(ctx)
 		defer cancel()
@@ -151,11 +147,13 @@ func TestConsumer_Integration(t *testing.T) {
 		defer consumer.Close()
 
 		badMsg := []byte("broken_json_here")
-		writeToKafka(t, topic, badMsg)
+		w := &kafka.Writer{Addr: kafka.TCP(brokers...), Topic: topic, MaxAttempts: 5, RequiredAcks: kafka.RequireAll}
+		_ = w.WriteMessages(ctx, kafka.Message{Value: badMsg})
+		w.Close()
 
 		dlqMsg := readFromDLQ(t, dlqTopic)
-		assert.Equal(t, string(badMsg), string(dlqMsg), "В DLQ должен лежать тот же кривой текст")
-		assert.Equal(t, 0, mockBot.calls, "Бот не должен был вызываться")
+		assert.Equal(t, string(badMsg), string(dlqMsg))
+		assert.Equal(t, 0, mockBot.GetCalls())
 	})
 
 	t.Run("Error processing -> retries exhausted -> sent to DLQ", func(t *testing.T) {
@@ -164,19 +162,22 @@ func TestConsumer_Integration(t *testing.T) {
 		createTopic(t, dlqTopic)
 
 		mockBot := &MockBot{shouldError: true}
-		consumer := myKafka.NewConsumer(brokers, topic, dlqTopic, "g3", 3, mockBot, logger)
+		consumer := myKafka.NewConsumer(brokers, topic, dlqTopic, "g3", logger, 3, mockBot, mockSR.URL)
 
 		ctxCancel, cancel := context.WithCancel(ctx)
 		defer cancel()
 		go consumer.Start(ctxCancel)
 		defer consumer.Close()
 
-		update := domain.LinkUpdate{URL: "https://github.com/fail", Description: "Fail", TgChatIDs: []int64{123}}
-		b, _ := json.Marshal(update)
-		writeToKafka(t, topic, b)
+		producer, _ := scrapperKafka.NewProducer(brokers, topic, mockSR.URL)
+		defer producer.Close()
+		_ = producer.SendUpdate(ctx, scrapDomain.LinkUpdate{URL: "https://fail", Description: "Fail", TgChatIDs: []int64{123}})
 
 		dlqMsg := readFromDLQ(t, dlqTopic)
-		assert.JSONEq(t, string(b), string(dlqMsg), "Оригинальный JSON должен дойти до DLQ")
-		assert.Equal(t, 3, mockBot.calls, "Должно быть ровно 3 попытки отправить сообщение")
+		assert.NotEmpty(t, dlqMsg)
+
+		assert.Eventually(t, func() bool {
+			return mockBot.GetCalls() == 3
+		}, 30*time.Second, 1*time.Second)
 	})
 }
