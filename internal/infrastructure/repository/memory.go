@@ -23,6 +23,9 @@ func NewInMemoryLinkRepository() *InMemoryLinkRepository {
 func (r *InMemoryLinkRepository) AddLink(ctx context.Context, chatID int64, link domain.Link) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	link.LastCheckTime = time.Unix(0, 0)
+
 	r.links[chatID] = append(r.links[chatID], link)
 	return nil
 }
@@ -32,12 +35,34 @@ func (r *InMemoryLinkRepository) RemoveLink(ctx context.Context, chatID int64, u
 	defer r.mu.Unlock()
 
 	links := r.links[chatID]
+	found := false
 	for i, link := range links {
 		if link.URL == url {
 			r.links[chatID] = append(links[:i], links[i+1:]...)
-			return nil
+			found = true
+			break
 		}
 	}
+
+	if !found {
+		return nil
+	}
+	isOrphaned := true
+	for id, userLinks := range r.links {
+		if id == chatID {
+			continue
+		}
+		for _, l := range userLinks {
+			if l.URL == url {
+				isOrphaned = false
+				break
+			}
+		}
+		if !isOrphaned {
+			break
+		}
+	}
+
 	return nil
 }
 
@@ -70,7 +95,7 @@ func (r *InMemoryLinkRepository) HasLink(ctx context.Context, chatID int64, url 
 func (r *InMemoryLinkRepository) GetLinksToCheck(ctx context.Context, limit int, before time.Time) ([]domain.Link, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	uniqueLinks := make(map[string]domain.Link)
 	for _, chatLinks := range r.links {
 		for _, link := range chatLinks {

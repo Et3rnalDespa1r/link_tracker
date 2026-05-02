@@ -13,7 +13,7 @@ type Config struct {
 	BotTimeout    int    `env:"BOT_TIMEOUT" envDefault:"60"`
 	BotAddress    string `env:"BOT_ADDRESS" envDefault:":8080"`
 
-	ServerAddress string `env:"SCRAPPER_ADDRESS" envDefault:":8081"`
+	ServerAddress string `env:"SCRAPPER_ADDRESS" envDefault:":8083"`
 	BotURL        string `env:"BOT_URL" envDefault:"http://localhost:8080"`
 
 	DBHost     string `env:"DB_HOST" envDefault:"localhost"`
@@ -28,6 +28,10 @@ type Config struct {
 	CheckInterval time.Duration `env:"CHECK_INTERVAL" envDefault:"5m"`
 
 	GithubToken string `env:"GITHUB_TOKEN"`
+
+	UseKafka     bool     `env:"USE_KAFKA" envDefault:"true"`
+	KafkaBrokers []string `env:"KAFKA_BROKERS" envSeparator:"," envDefault:"localhost:9092,localhost:9094,localhost:9095"`
+	KafkaTopic   string   `env:"KAFKA_TOPIC" envDefault:"link.updates"`
 }
 
 func (c *Config) DatabaseDSN() string {

@@ -1,0 +1,26 @@
+{
+  "type": "record",
+  "name": "LinkUpdate",
+  "namespace": "ru.tbank.linktracker",
+  "fields": [
+    {
+      "name": "id",
+      "type": "long"
+    },
+    {
+      "name": "url",
+      "type": "string"
+    },
+    {
+      "name": "description",
+      "type": "string"
+    },
+    {
+      "name": "tgChatIds",
+      "type": {
+        "type": "array",
+        "items": "long"
+      }
+    }
+  ]
+}
