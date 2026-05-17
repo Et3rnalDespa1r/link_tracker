@@ -36,6 +36,9 @@ type Config struct {
 	KafkaGroupID      string `env:"KAFKA_GROUP_ID" envDefault:"link-tracker-bot-group"`
 	KafkaRetries      int    `env:"KAFKA_RETRIES" envDefault:"3"`
 	SchemaRegistryURL string `env:"SCHEMA_REGISTRY_URL" envDefault:"http://localhost:8081"`
+
+	ValkeyAddresses []string      `env:"VALKEY_ADDRESSES" envDefault:"localhost:6379,localhost:6380,localhost:6381"`
+	ValkeyCacheTTL  time.Duration `env:"VALKEY_CACHE_TTL" envDefault:"5m"`
 }
 
 func (c *Config) DatabaseDSN() string {

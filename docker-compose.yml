@@ -1,4 +1,40 @@
 services:
+  valkey-node-0:
+    image: valkey/valkey:8.0
+    container_name: valkey-node-0
+    command: valkey-server --port 6379 --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --appendonly yes
+    ports:
+      - "6379:6379"
+      - "16379:16379"
+
+  valkey-node-1:
+      image: valkey/valkey:8.0
+      container_name: valkey-node-1
+      command: valkey-server --port 6380 --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --appendonly yes
+      ports:
+        - "6380:6380"
+        - "16380:16380"
+
+  valkey-node-2:
+      image: valkey/valkey:8.0
+      container_name: valkey-node-2
+      command: valkey-server --port 6381 --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --appendonly yes
+      ports:
+        - "6381:6381"
+        - "16381:16381"
+
+  valkey-cluster-init:
+      image: valkey/valkey:8.0
+      container_name: valkey-cluster-init
+      depends_on:
+        - valkey-node-0
+        - valkey-node-1
+        - valkey-node-2
+      command: >
+        sh -c "
+          echo 'Ждем поднятия нод...' && sleep 5 &&
+          echo 'yes' | valkey-cli --cluster create valkey-node-0:6379 valkey-node-1:6380 valkey-node-2:6381 --cluster-replicas 0
+        "
   postgres:
     image: postgres:15-alpine
     container_name: link_tracker_db
@@ -119,3 +155,6 @@ services:
         - kafka-3
 volumes:
     postgres_data:
+    valkey_data_0:
+    valkey_data_1:
+    valkey_data_2:

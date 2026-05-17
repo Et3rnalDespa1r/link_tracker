@@ -12,6 +12,7 @@ import (
 	"github.com/go-co-op/gocron"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/config"
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/cache"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/repository/postgres"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/client"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/client/kafka"
@@ -42,7 +43,12 @@ func main() {
 
 	repo := postgres.NewSqlLinkRepository(pool)
 	var sender updater.UpdateSender
-
+	valkeyClient, err := cache.NewValkeyClient(cfg.ValkeyAddresses, logger)
+	if err != nil {
+		logger.Error("Не удалось инициализировать Valkey", "error", err)
+	} else {
+		defer valkeyClient.Close()
+	}
 	if cfg.UseKafka {
 		schemaRegistryURL := "http://localhost:8081"
 		kafkaProducer, err := kafka.NewProducer(cfg.KafkaBrokers, cfg.KafkaTopic, schemaRegistryURL)
@@ -84,8 +90,8 @@ func main() {
 		os.Exit(1)
 	}
 	scheduler.StartAsync()
-
-	httpServer := http.NewScrapperServer(cfg.ServerAddress, logger)
+	respCache := cache.NewResponseCache(valkeyClient, cfg.ValkeyCacheTTL)
+	httpServer := http.NewScrapperServer(cfg.ServerAddress, logger, respCache, repo)
 
 	errCh := make(chan error, 1)
 
