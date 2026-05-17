@@ -71,20 +71,17 @@ func main() {
 	}
 
 	if cfg.UseKafka {
-		groupID := "link-tracker-bot-group"
-		schemaRegistryURL := "http://localhost:8081"
 		dlqTopic := cfg.KafkaTopic + ".dlq"
-		retries := 3
 
 		kafkaConsumer := kafka.NewConsumer(
 			cfg.KafkaBrokers,
 			cfg.KafkaTopic,
 			dlqTopic,
-			groupID,
+			cfg.KafkaGroupID,
 			logger,
-			retries,
+			cfg.KafkaRetries,
 			tgBot,
-			schemaRegistryURL,
+			cfg.SchemaRegistryURL,
 		)
 
 		go func() {

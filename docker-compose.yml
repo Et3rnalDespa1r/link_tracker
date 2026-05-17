@@ -98,9 +98,9 @@ services:
         "
         sleep 15
         
-        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-1:29092 --create --if-not-exists --topic link.updates --partitions 3 --replication-factor 2
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-1:29092 --create --if-not-exists --topic link.updates --partitions 3 --replication-factor 3
         
-        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-1:29092 --create --if-not-exists --topic link.updates.dlq --partitions 1 --replication-factor 2
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-1:29092 --create --if-not-exists --topic link.updates.dlq --partitions 1 --replication-factor 3
         
         "
 

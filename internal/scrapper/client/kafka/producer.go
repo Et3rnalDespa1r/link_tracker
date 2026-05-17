@@ -40,9 +40,12 @@ func NewProducer(brokers []string, topic string, schemaRegistryURL string) (*Pro
 	srClient := srclient.CreateSchemaRegistryClient(schemaRegistryURL)
 
 	subject := topic + "-value"
-	schema, err := srClient.CreateSchema(subject, linkUpdateSchema, srclient.Avro)
+	schema, err := srClient.GetLatestSchema(subject)
 	if err != nil {
-		return nil, fmt.Errorf("ошибка регистрации схемы: %w", err)
+		schema, err = srClient.CreateSchema(subject, linkUpdateSchema, srclient.Avro)
+		if err != nil {
+			return nil, fmt.Errorf("failed to register avro schema: %w", err)
+		}
 	}
 
 	parsed, err := avro.Parse(schema.Schema())

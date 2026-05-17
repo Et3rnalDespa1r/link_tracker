@@ -32,6 +32,10 @@ type Config struct {
 	UseKafka     bool     `env:"USE_KAFKA" envDefault:"true"`
 	KafkaBrokers []string `env:"KAFKA_BROKERS" envSeparator:"," envDefault:"localhost:9092,localhost:9094,localhost:9095"`
 	KafkaTopic   string   `env:"KAFKA_TOPIC" envDefault:"link.updates"`
+
+	KafkaGroupID      string `env:"KAFKA_GROUP_ID" envDefault:"link-tracker-bot-group"`
+	KafkaRetries      int    `env:"KAFKA_RETRIES" envDefault:"3"`
+	SchemaRegistryURL string `env:"SCHEMA_REGISTRY_URL" envDefault:"http://localhost:8081"`
 }
 
 func (c *Config) DatabaseDSN() string {

@@ -15,6 +15,13 @@ import (
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/domain"
 )
 
+const (
+	magicByte        = 0
+	magicByteSize    = 1
+	schemaIDSize     = 4
+	avroHeaderLength = magicByteSize + schemaIDSize
+)
+
 type NotificationSender interface {
 	SendNotification(ctx context.Context, chatID int64, text string) error
 }
@@ -74,18 +81,18 @@ func (c *Consumer) Start(ctx context.Context) {
 }
 
 func (c *Consumer) processMessage(ctx context.Context, msg kafka.Message) error {
-	if len(msg.Value) < 5 || msg.Value[0] != 0 {
+	if len(msg.Value) < avroHeaderLength || msg.Value[0] != magicByte {
 		return fmt.Errorf("invalid magic byte")
 	}
 
-	schemaID := int(binary.BigEndian.Uint32(msg.Value[1:5]))
+	schemaID := int(binary.BigEndian.Uint32(msg.Value[magicByteSize:avroHeaderLength]))
 	parsedSchema, err := c.getSchema(schemaID)
 	if err != nil {
 		return err
 	}
 
 	var update domain.LinkUpdate
-	if err := avro.Unmarshal(parsedSchema, msg.Value[5:], &update); err != nil {
+	if err := avro.Unmarshal(parsedSchema, msg.Value[avroHeaderLength:], &update); err != nil {
 		return err
 	}
 
