@@ -110,3 +110,7 @@ func (b *Bot) SendMessage(chatID int64, text string) error {
 	_, err := b.api.Send(reply)
 	return err
 }
+
+func (b *Bot) SendNotification(ctx context.Context, chatID int64, text string) error {
+	return b.SendMessage(chatID, text)
+}

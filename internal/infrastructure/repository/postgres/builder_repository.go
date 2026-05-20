@@ -2,11 +2,14 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/domain"
+	scrapDomain "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/domain"
 )
 
 type BuilderLinkRepository struct {
@@ -40,8 +43,8 @@ func (r *BuilderLinkRepository) AddLink(ctx context.Context, chatID int64, link 
 
 	var linkID int64
 	linkQuery, linkArgs, _ := r.psql.Insert("links").
-		Columns("url").
-		Values(link.URL).
+		Columns("url", "last_check_time").
+		Values(link.URL, time.Unix(0, 0)).
 		Suffix("ON CONFLICT (url) DO UPDATE SET url = EXCLUDED.url RETURNING id").
 		ToSql()
 	err = tx.QueryRow(ctx, linkQuery, linkArgs...).Scan(&linkID)
@@ -75,13 +78,31 @@ func (r *BuilderLinkRepository) AddLink(ctx context.Context, chatID int64, link 
 }
 
 func (r *BuilderLinkRepository) RemoveLink(ctx context.Context, chatID int64, url string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
 	query, args, _ := r.psql.Delete("subscriptions").
 		Where(squirrel.Eq{"chat_id": chatID}).
 		Where(squirrel.Expr("link_id = (SELECT id FROM links WHERE url = ?)", url)).
 		ToSql()
 
-	_, err := r.pool.Exec(ctx, query, args...)
-	return err
+	if _, err := tx.Exec(ctx, query, args...); err != nil {
+		return fmt.Errorf("delete subscription: %w", err)
+	}
+
+	cleanupQuery, args, _ := r.psql.Delete("links").
+		Where(squirrel.Eq{"url": url}).
+		Where(squirrel.Expr("id NOT IN (SELECT link_id FROM subscriptions)")).
+		ToSql()
+
+	if _, err := tx.Exec(ctx, cleanupQuery, args...); err != nil {
+		return fmt.Errorf("cleanup link: %w", err)
+	}
+
+	return tx.Commit(ctx)
 }
 
 func (r *BuilderLinkRepository) GetLinks(ctx context.Context, chatID int64) ([]domain.Link, error) {
@@ -194,4 +215,34 @@ func (r *BuilderLinkRepository) GetChatIDsForLink(ctx context.Context, linkID in
 		chatIDs = append(chatIDs, chatID)
 	}
 	return chatIDs, rows.Err()
+}
+
+func (r *BuilderLinkRepository) UpdateLinkAndSaveOutbox(ctx context.Context, link domain.Link, update scrapDomain.LinkUpdate) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	updateQuery, updateArgs, _ := r.psql.Update("links").
+		Set("last_check_time", link.LastCheckTime).
+		Set("updated_at", link.UpdatedAt).
+		Where(squirrel.Eq{"id": link.ID}).
+		ToSql()
+
+	if _, err := tx.Exec(ctx, updateQuery, updateArgs...); err != nil {
+		return err
+	}
+
+	payload, _ := json.Marshal(update)
+	insertQuery, insertArgs, _ := r.psql.Insert("link_updates_outbox").
+		Columns("payload", "status").
+		Values(payload, "PENDING").
+		ToSql()
+
+	if _, err := tx.Exec(ctx, insertQuery, insertArgs...); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
 }

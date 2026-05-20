@@ -8,11 +8,9 @@ import (
 	"time"
 
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/config"
-
 	coreDomain "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/domain"
-	scrapDomain "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/domain"
-
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/client"
+	scrapDomain "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/domain"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/parser"
 )
 
@@ -20,10 +18,15 @@ type Repository interface {
 	GetLinksToCheck(ctx context.Context, limit int, before time.Time) ([]coreDomain.Link, error)
 	UpdateLink(ctx context.Context, link coreDomain.Link) error
 	GetChatIDsForLink(ctx context.Context, linkID int64) ([]int64, error)
+	UpdateLinkAndSaveOutbox(ctx context.Context, link coreDomain.Link, update scrapDomain.LinkUpdate) error
+}
+
+type UpdateSender interface {
+	SendUpdate(ctx context.Context, update scrapDomain.LinkUpdate) error
 }
 
 type Updater struct {
-	botClient    *client.BotClient
+	sender       UpdateSender
 	repo         Repository
 	cfg          *config.Config
 	logger       *slog.Logger
@@ -32,7 +35,7 @@ type Updater struct {
 }
 
 func NewUpdater(
-	botClient *client.BotClient,
+	sender UpdateSender,
 	repo Repository,
 	cfg *config.Config,
 	logger *slog.Logger,
@@ -40,7 +43,7 @@ func NewUpdater(
 	soClient *client.StackOverflowClient,
 ) *Updater {
 	return &Updater{
-		botClient:    botClient,
+		sender:       sender,
 		repo:         repo,
 		cfg:          cfg,
 		logger:       logger,
@@ -123,7 +126,6 @@ func (u *Updater) processLink(ctx context.Context, link coreDomain.Link) error {
 		}
 
 		if len(chatIDs) > 0 {
-			// Клеим строку из деталей
 			description := fmt.Sprintf(
 				"**Новое обновление!** (%s)\n\n"+
 					"**Тема:** %s\n"+
@@ -144,14 +146,25 @@ func (u *Updater) processLink(ctx context.Context, link coreDomain.Link) error {
 				TgChatIDs:   chatIDs,
 			}
 
-			if err := u.botClient.SendUpdate(ctx, updateReq); err != nil {
-				u.logger.Error("Не удалось отправить обновление боту", "error", err)
+			link.UpdatedAt = updateDetail.CreatedAt
+			link.LastCheckTime = time.Now()
+
+			if u.cfg.UseKafka {
+				if err := u.repo.UpdateLinkAndSaveOutbox(ctx, link, updateReq); err != nil {
+					u.logger.Error("Ошибка транзакционного Outbox", "error", err)
+					return err
+				}
+				u.logger.Info("Обновление сохранено в Outbox", "url", link.URL)
+				return nil
+			}
+
+			if err := u.sender.SendUpdate(ctx, updateReq); err != nil {
+				u.logger.Error("Не удалось отправить обновление", "error", err)
 			} else {
 				u.logger.Info("Обновление успешно отправлено", "url", link.URL, "chats", len(chatIDs))
 			}
+			return u.repo.UpdateLink(ctx, link)
 		}
-
-		link.UpdatedAt = updateDetail.CreatedAt
 	}
 
 	return u.updateCheckTime(ctx, link)

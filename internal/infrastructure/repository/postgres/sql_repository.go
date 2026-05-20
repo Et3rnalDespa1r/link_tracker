@@ -2,10 +2,12 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/domain"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/domain"
+	scrapDomain "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/domain"
 )
 
 type SqlLinkRepository struct {
@@ -32,16 +34,11 @@ func (r *SqlLinkRepository) AddLink(ctx context.Context, chatID int64, link doma
 
 	var linkID int64
 	err = tx.QueryRow(ctx, `
-		WITH e AS (
-			INSERT INTO links (url) VALUES ($1)
-			ON CONFLICT (url) DO NOTHING
-			RETURNING id
-		)
-		SELECT id FROM e
-		UNION ALL
-		SELECT id FROM links WHERE url = $1
-		LIMIT 1
-	`, link.URL).Scan(&linkID)
+       INSERT INTO links (url, last_check_time) 
+       VALUES ($1, '1970-01-01 00:00:00+00')
+       ON CONFLICT (url) DO UPDATE SET url = EXCLUDED.url
+       RETURNING id
+    `, link.URL).Scan(&linkID)
 	if err != nil {
 		return err
 	}
@@ -62,12 +59,29 @@ func (r *SqlLinkRepository) AddLink(ctx context.Context, chatID int64, link doma
 }
 
 func (r *SqlLinkRepository) RemoveLink(ctx context.Context, chatID int64, url string) error {
-	query := `
-		DELETE FROM subscriptions
-		WHERE chat_id = $1 AND link_id = (SELECT id FROM links WHERE url = $2)
-	`
-	_, err := r.pool.Exec(ctx, query, chatID, url)
-	return err
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	_, err = tx.Exec(ctx, `
+        DELETE FROM subscriptions 
+        WHERE chat_id = $1 AND link_id = (SELECT id FROM links WHERE url = $2)`,
+		chatID, url)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(ctx, `
+        DELETE FROM links 
+        WHERE url = $1 AND id NOT IN (SELECT link_id FROM subscriptions)`,
+		url)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
 }
 
 func (r *SqlLinkRepository) GetLinks(ctx context.Context, chatID int64) ([]domain.Link, error) {
@@ -173,4 +187,25 @@ func (r *SqlLinkRepository) GetChatIDsForLink(ctx context.Context, linkID int64)
 		chatIDs = append(chatIDs, chatID)
 	}
 	return chatIDs, rows.Err()
+}
+
+func (r *SqlLinkRepository) UpdateLinkAndSaveOutbox(ctx context.Context, link domain.Link, update scrapDomain.LinkUpdate) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	_, err = tx.Exec(ctx, `UPDATE links SET last_check_time = $1, updated_at = $2 WHERE id = $3`, link.LastCheckTime, link.UpdatedAt, link.ID)
+	if err != nil {
+		return err
+	}
+
+	payload, _ := json.Marshal(update)
+	_, err = tx.Exec(ctx, `INSERT INTO link_updates_outbox (payload, status) VALUES ($1, 'PENDING')`, payload)
+	if err != nil {
+		return err
+	}
+	
+	return tx.Commit(ctx)
 }

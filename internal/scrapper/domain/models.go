@@ -21,10 +21,10 @@ type RemoveLinkRequest struct {
 }
 
 type LinkUpdate struct {
-	ID          int64   `json:"id"`
-	URL         string  `json:"url"`
-	Description string  `json:"description"`
-	TgChatIDs   []int64 `json:"tgChatIds"`
+	ID          int64   `json:"id" avro:"id"`
+	URL         string  `json:"url" avro:"url"`
+	Description string  `json:"description" avro:"description"`
+	TgChatIDs   []int64 `json:"tgChatIds" avro:"tgChatIds"`
 }
 
 type UpdateDetail struct {

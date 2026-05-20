@@ -80,11 +80,11 @@ func TestRepositories(t *testing.T) {
 			err := repo.AddLink(ctx, chatID, link)
 			assert.NoError(t, err)
 
-			// 2. Проверка, что дублирующая ссылка не вызывает ошибку (DO NOTHING в SQL)
+			// 2. Проверка, что дублирующая ссылка не вызывает ошибку
 			err = repo.AddLink(ctx, chatID, link)
 			assert.NoError(t, err)
 
-			// 3. Проверка существования (HasLink)
+			// 3. Проверка существования
 			exists, err := repo.HasLink(ctx, chatID, link.URL)
 			assert.NoError(t, err)
 			assert.True(t, exists)

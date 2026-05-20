@@ -78,11 +78,17 @@ func (c *GithubClient) FetchLatestEvent(ctx context.Context, owner, repo string,
 			continue
 		}
 
-		if event.Payload.Action != "opened" {
-			continue
+		if event.Type == "PushEvent" {
+			return &domain.UpdateDetail{
+				Type:      "GitHub Push",
+				Title:     "Новый коммит в репозиторий",
+				Author:    event.Actor.Login,
+				CreatedAt: event.CreatedAt,
+				Preview:   fmt.Sprintf("Пользователь %s запушил изменения", event.Actor.Login),
+			}, nil
 		}
 
-		if event.Type == "IssuesEvent" && event.Payload.Issue != nil {
+		if event.Type == "IssuesEvent" && event.Payload.Action == "opened" {
 			return &domain.UpdateDetail{
 				Type:      "GitHub Issue",
 				Title:     event.Payload.Issue.Title,

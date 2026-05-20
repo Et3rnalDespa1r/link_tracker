@@ -2,3 +2,4 @@ DROP TABLE IF EXISTS tags;
 DROP TABLE IF EXISTS subscriptions;
 DROP TABLE IF EXISTS links;
 DROP TABLE IF EXISTS chats;
+DROP TABLE IF EXISTS link_updates_outbox;

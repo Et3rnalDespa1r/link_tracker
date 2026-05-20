@@ -14,6 +14,7 @@ import (
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/config"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/repository/postgres"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/client"
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/client/kafka"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/http"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/updater"
 )
@@ -40,13 +41,38 @@ func main() {
 	defer pool.Close()
 
 	repo := postgres.NewSqlLinkRepository(pool)
+	var sender updater.UpdateSender
 
-	botClient := client.NewBotClient(cfg.BotURL)
+	if cfg.UseKafka {
+		schemaRegistryURL := "http://localhost:8081"
+		kafkaProducer, err := kafka.NewProducer(cfg.KafkaBrokers, cfg.KafkaTopic, schemaRegistryURL)
+		if err != nil {
+			logger.Error("Не удалось создать Avro Producer", "error", err)
+			os.Exit(1)
+		}
+
+		defer func() {
+			if err := kafkaProducer.Close(); err != nil {
+				logger.Error("Ошибка закрытия Kafka продюсера", "error", err)
+			}
+		}()
+		sender = kafkaProducer
+
+		outboxRepo := postgres.NewOutboxRepository(pool)
+		outboxProcessor := kafka.NewOutboxProcessor(outboxRepo, kafkaProducer, logger)
+		go outboxProcessor.Run(ctx)
+
+		logger.Info("Скраппер запущен. Уведомления отправляются через Kafka (Outbox + Avro)", slog.Any("brokers", cfg.KafkaBrokers))
+	} else {
+		botClient := client.NewBotClient(cfg.BotURL)
+		sender = botClient
+		logger.Info("Скраппер запущен. Уведомления отправляются через HTTP", slog.String("url", cfg.BotURL))
+	}
 
 	githubClient := client.NewGithubClient("https://api.github.com", cfg.GithubToken)
 	soClient := client.NewStackOverflowClient("https://api.stackexchange.com/2.3")
 
-	updateSvc := updater.NewUpdater(botClient, repo, cfg, logger, githubClient, soClient)
+	updateSvc := updater.NewUpdater(sender, repo, cfg, logger, githubClient, soClient)
 
 	scheduler := gocron.NewScheduler(time.UTC)
 

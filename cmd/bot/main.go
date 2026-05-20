@@ -14,6 +14,7 @@ import (
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/config"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/db"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/http"
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/kafka"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/repository/postgres"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/telegram"
 )
@@ -49,7 +50,7 @@ func main() {
 		repo = postgres.NewSqlLinkRepository(pool)
 		logger.Info("Используется Raw SQL репозиторий")
 	} else if cfg.AccessType == "ORM" {
-		repo = postgres.NewSqlLinkRepository(pool)
+		repo = postgres.NewBuilderLinkRepository(pool)
 		logger.Info("Используется Query Builder (ORM) репозиторий")
 	} else {
 		logger.Error("Неизвестный тип доступа к БД", slog.String("ACCESS_TYPE", cfg.AccessType))
@@ -67,6 +68,30 @@ func main() {
 
 	if err := tgBot.SetupCommands(); err != nil {
 		logger.Error("Не удалось установить команды меню", "error", err)
+	}
+
+	if cfg.UseKafka {
+		dlqTopic := cfg.KafkaTopic + ".dlq"
+
+		kafkaConsumer := kafka.NewConsumer(
+			cfg.KafkaBrokers,
+			cfg.KafkaTopic,
+			dlqTopic,
+			cfg.KafkaGroupID,
+			logger,
+			cfg.KafkaRetries,
+			tgBot,
+			cfg.SchemaRegistryURL,
+		)
+
+		go func() {
+			defer kafkaConsumer.Close()
+			kafkaConsumer.Start(ctx)
+		}()
+
+		logger.Info("Бот слушает обновления через Kafka (Avro)", slog.Any("brokers", cfg.KafkaBrokers))
+	} else {
+		logger.Info("Бот готов принимать обновления по HTTP")
 	}
 
 	httpServer := http.NewBotServer(cfg.BotAddress, botService, logger)
