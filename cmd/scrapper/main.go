@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"github.com/go-co-op/gocron"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/config"
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/repository/postgres"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/client"
-	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/config"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/http"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/updater"
 )
@@ -30,11 +32,25 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	pool, err := pgxpool.New(ctx, cfg.DatabaseDSN())
+	if err != nil {
+		logger.Error("Ошибка подключения к БД", "error", err)
+		os.Exit(1)
+	}
+	defer pool.Close()
+
+	repo := postgres.NewSqlLinkRepository(pool)
+
 	botClient := client.NewBotClient(cfg.BotURL)
-	updateSvc := updater.NewUpdater(botClient, logger)
+
+	githubClient := client.NewGithubClient("https://api.github.com", cfg.GithubToken)
+	soClient := client.NewStackOverflowClient("https://api.stackexchange.com/2.3")
+
+	updateSvc := updater.NewUpdater(botClient, repo, cfg, logger, githubClient, soClient)
 
 	scheduler := gocron.NewScheduler(time.UTC)
-	_, err = scheduler.Every(30).Seconds().Do(func() {
+
+	_, err = scheduler.Every(cfg.CheckInterval).Do(func() {
 		updateSvc.ProcessUpdates(ctx)
 	})
 	if err != nil {

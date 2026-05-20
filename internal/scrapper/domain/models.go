@@ -1,5 +1,7 @@
 package domain
 
+import "time"
+
 type LinkResponse struct {
 	ID  int64  `json:"id"`
 	URL string `json:"url"`
@@ -23,4 +25,12 @@ type LinkUpdate struct {
 	URL         string  `json:"url"`
 	Description string  `json:"description"`
 	TgChatIDs   []int64 `json:"tgChatIds"`
+}
+
+type UpdateDetail struct {
+	Type      string
+	Title     string
+	Author    string
+	CreatedAt time.Time
+	Preview   string
 }

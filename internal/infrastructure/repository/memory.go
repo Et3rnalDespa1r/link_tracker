@@ -2,7 +2,9 @@ package repository
 
 import (
 	"context"
+	"sort"
 	"sync"
+	"time"
 
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/domain"
 )
@@ -63,4 +65,64 @@ func (r *InMemoryLinkRepository) HasLink(ctx context.Context, chatID int64, url 
 		}
 	}
 	return false, nil
+}
+
+func (r *InMemoryLinkRepository) GetLinksToCheck(ctx context.Context, limit int, before time.Time) ([]domain.Link, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	
+	uniqueLinks := make(map[string]domain.Link)
+	for _, chatLinks := range r.links {
+		for _, link := range chatLinks {
+			if link.LastCheckTime.Before(before) {
+				uniqueLinks[link.URL] = link
+			}
+		}
+	}
+
+	var result []domain.Link
+	for _, link := range uniqueLinks {
+		result = append(result, link)
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].LastCheckTime.Before(result[j].LastCheckTime)
+	})
+
+	if limit > 0 && len(result) > limit {
+		result = result[:limit]
+	}
+
+	return result, nil
+}
+
+func (r *InMemoryLinkRepository) UpdateLink(ctx context.Context, updatedLink domain.Link) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for chatID, chatLinks := range r.links {
+		for i, link := range chatLinks {
+			if link.URL == updatedLink.URL {
+				r.links[chatID][i].LastCheckTime = updatedLink.LastCheckTime
+				r.links[chatID][i].UpdatedAt = updatedLink.UpdatedAt
+			}
+		}
+	}
+	return nil
+}
+
+func (r *InMemoryLinkRepository) GetChatIDsForLink(ctx context.Context, linkID int64) ([]int64, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var chatIDs []int64
+	for chatID, chatLinks := range r.links {
+		for _, link := range chatLinks {
+			if link.ID == linkID {
+				chatIDs = append(chatIDs, chatID)
+				break
+			}
+		}
+	}
+	return chatIDs, nil
 }
