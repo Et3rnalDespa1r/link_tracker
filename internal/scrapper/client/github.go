@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/config"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/domain"
 )
 
@@ -32,14 +33,14 @@ type GithubEvent struct {
 
 type GithubClient struct {
 	baseURL string
-	client  *http.Client
+	client  *ResilientHTTPClient
 	token   string
 }
 
-func NewGithubClient(baseURL string, token string) *GithubClient {
+func NewGithubClient(baseURL string, token string, cfg *config.Config) *GithubClient {
 	return &GithubClient{
 		baseURL: baseURL,
-		client:  &http.Client{Timeout: 10 * time.Second},
+		client:  NewResilientHTTPClient(cfg, "github"),
 		token:   token,
 	}
 }

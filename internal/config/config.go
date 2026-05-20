@@ -39,6 +39,22 @@ type Config struct {
 
 	ValkeyAddresses []string      `env:"VALKEY_ADDRESSES" envDefault:"localhost:6379,localhost:6380,localhost:6381"`
 	ValkeyCacheTTL  time.Duration `env:"VALKEY_CACHE_TTL" envDefault:"5m"`
+
+	HTTPTimeout time.Duration `env:"HTTP_TIMEOUT" envDefault:"5s"`
+
+	RetryAttempts     int           `env:"RETRY_ATTEMPTS" envDefault:"3"`
+	RetryDelay        time.Duration `env:"RETRY_DELAY" envDefault:"1s"`
+	RetryableStatuses []int         `env:"RETRYABLE_STATUSES" envSeparator:"," envDefault:"500,502,503,504"`
+	RetryExponential  bool          `env:"RETRY_EXPONENTIAL" envDefault:"false"`
+
+	CBSlidingWindowSize        uint32        `env:"CB_SLIDING_WINDOW_SIZE" envDefault:"10"`
+	CBMinimumRequiredCalls     uint32        `env:"CB_MINIMUM_REQUIRED_CALLS" envDefault:"5"`
+	CBFailureRateThreshold     float64       `env:"CB_FAILURE_RATE_THRESHOLD" envDefault:"50.0"`
+	CBPermittedCallsInHalfOpen uint32        `env:"CB_PERMITTED_CALLS_IN_HALF_OPEN" envDefault:"5"`
+	CBWaitDurationInOpenState  time.Duration `env:"CB_WAIT_DURATION_IN_OPEN_STATE" envDefault:"10s"`
+
+	RateLimitRPS   float64 `env:"RATE_LIMIT_RPS" envDefault:"10.0"`
+	RateLimitBurst int     `env:"RATE_LIMIT_BURST" envDefault:"20"`
 }
 
 func (c *Config) DatabaseDSN() string {

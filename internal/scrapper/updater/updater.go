@@ -148,21 +148,19 @@ func (u *Updater) processLink(ctx context.Context, link coreDomain.Link) error {
 
 			link.UpdatedAt = updateDetail.CreatedAt
 			link.LastCheckTime = time.Now()
+			
+			if err := u.sender.SendUpdate(ctx, updateReq); err != nil {
+				u.logger.Warn("Основной транспорт (HTTP) недоступен. Fallback на Kafka", "error", err)
 
-			if u.cfg.UseKafka {
-				if err := u.repo.UpdateLinkAndSaveOutbox(ctx, link, updateReq); err != nil {
-					u.logger.Error("Ошибка транзакционного Outbox", "error", err)
-					return err
+				if outboxErr := u.repo.UpdateLinkAndSaveOutbox(ctx, link, updateReq); outboxErr != nil {
+					u.logger.Error("Ошибка транзакционного Outbox при Fallback", "error", outboxErr)
+					return outboxErr
 				}
-				u.logger.Info("Обновление сохранено в Outbox", "url", link.URL)
+				u.logger.Info("Обновление успешно сохранено в Outbox (Fallback)", "url", link.URL)
 				return nil
 			}
 
-			if err := u.sender.SendUpdate(ctx, updateReq); err != nil {
-				u.logger.Error("Не удалось отправить обновление", "error", err)
-			} else {
-				u.logger.Info("Обновление успешно отправлено", "url", link.URL, "chats", len(chatIDs))
-			}
+			u.logger.Info("Обновление успешно отправлено по HTTP", "url", link.URL, "chats", len(chatIDs))
 			return u.repo.UpdateLink(ctx, link)
 		}
 	}

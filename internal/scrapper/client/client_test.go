@@ -9,7 +9,17 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/config"
 )
+
+func getTestConfig() *config.Config {
+	return &config.Config{
+		HTTPTimeout:       1 * time.Second,
+		RetryAttempts:     1,
+		RetryDelay:        10 * time.Millisecond,
+		RetryableStatuses: []int{500},
+	}
+}
 
 func TestGithubClient_FetchLatestEvent(t *testing.T) {
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -28,7 +38,8 @@ func TestGithubClient_FetchLatestEvent(t *testing.T) {
 	}))
 	defer mockServer.Close()
 
-	client := NewGithubClient(mockServer.URL, "")
+	cfg := getTestConfig()
+	client := NewGithubClient(mockServer.URL, "", cfg)
 	detail, err := client.FetchLatestEvent(context.Background(), "owner", "repo", time.Now().Add(-24*time.Hour))
 
 	assert.NoError(t, err)
@@ -45,7 +56,7 @@ func TestStackOverflowClient_FetchLatestAnswer(t *testing.T) {
 			"items": [
 				{
 					"answer_id": 123,
-					"creation_date": ` + "2000000000" + `,
+					"creation_date": 2000000000,
 					"body": "This is a great answer",
 					"owner": {"display_name": "SO_User"}
 				}
@@ -54,7 +65,8 @@ func TestStackOverflowClient_FetchLatestAnswer(t *testing.T) {
 	}))
 	defer mockServer.Close()
 
-	client := NewStackOverflowClient(mockServer.URL)
+	cfg := getTestConfig()
+	client := NewStackOverflowClient(mockServer.URL, cfg)
 	detail, err := client.FetchLatestAnswer(context.Background(), "12345", time.Unix(0, 0))
 
 	assert.NoError(t, err)
@@ -68,7 +80,8 @@ func TestClient_APIFailure(t *testing.T) {
 	}))
 	defer mockServer.Close()
 
-	client := NewGithubClient(mockServer.URL, "")
+	cfg := getTestConfig()
+	client := NewGithubClient(mockServer.URL, "", cfg)
 	detail, err := client.FetchLatestEvent(context.Background(), "owner", "repo", time.Now())
 
 	assert.Error(t, err)

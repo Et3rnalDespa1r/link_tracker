@@ -4,14 +4,68 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"net"
+	"net/http"
+	"strconv"
+	"sync"
+
+	"golang.org/x/time/rate"
+
 	coreDomain "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/domain"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/cache"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/repository/postgres"
 	scrapDomain "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/domain"
-	"log/slog"
-	"net/http"
-	"strconv"
 )
+
+type IPRateLimiter struct {
+	ips map[string]*rate.Limiter
+	mu  sync.RWMutex
+	r   rate.Limit
+	b   int
+}
+
+func NewIPRateLimiter(r rate.Limit, b int) *IPRateLimiter {
+	return &IPRateLimiter{
+		ips: make(map[string]*rate.Limiter),
+		r:   r,
+		b:   b,
+	}
+}
+
+func (i *IPRateLimiter) GetLimiter(ip string) *rate.Limiter {
+	i.mu.RLock()
+	limiter, exists := i.ips[ip]
+	i.mu.RUnlock()
+
+	if !exists {
+		i.mu.Lock()
+		defer i.mu.Unlock()
+		limiter, exists = i.ips[ip]
+		if !exists {
+			limiter = rate.NewLimiter(i.r, i.b)
+			i.ips[ip] = limiter
+		}
+		return limiter
+	}
+	return limiter
+}
+
+func rateLimitMiddleware(limiter *IPRateLimiter, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ip, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			ip = r.RemoteAddr
+		}
+
+		if !limiter.GetLimiter(ip).Allow() {
+			http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
 
 type ScrapperServer struct {
 	srv    *http.Server
@@ -20,13 +74,9 @@ type ScrapperServer struct {
 	repo   *postgres.SqlLinkRepository
 }
 
-func NewScrapperServer(address string, logger *slog.Logger, respCache *cache.ResponseCache, repo *postgres.SqlLinkRepository) *ScrapperServer {
+func NewScrapperServer(address string, rps float64, burst int, logger *slog.Logger, respCache *cache.ResponseCache, repo *postgres.SqlLinkRepository) *ScrapperServer {
 	mux := http.NewServeMux()
 	s := &ScrapperServer{
-		srv: &http.Server{
-			Addr:    address,
-			Handler: mux,
-		},
 		logger: logger,
 		cache:  respCache,
 		repo:   repo,
@@ -37,6 +87,14 @@ func NewScrapperServer(address string, logger *slog.Logger, respCache *cache.Res
 	mux.HandleFunc("GET /links", s.handleGetLinks)
 	mux.HandleFunc("POST /links", s.handleAddLink)
 	mux.HandleFunc("DELETE /links", s.handleRemoveLink)
+
+	limiter := NewIPRateLimiter(rate.Limit(rps), burst)
+	handlerWithRateLimit := rateLimitMiddleware(limiter, mux)
+
+	s.srv = &http.Server{
+		Addr:    address,
+		Handler: handlerWithRateLimit,
+	}
 
 	return s
 }

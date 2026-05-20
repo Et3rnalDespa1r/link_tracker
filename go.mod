@@ -4,6 +4,7 @@ go 1.25.1
 
 require (
 	github.com/Masterminds/squirrel v1.5.4
+	github.com/avast/retry-go/v4 v4.7.0
 	github.com/caarlos0/env/v11 v11.3.1
 	github.com/go-co-op/gocron v1.37.0
 	github.com/go-telegram-bot-api/telegram-bot-api/v5 v5.5.1
@@ -14,10 +15,12 @@ require (
 	github.com/redis/rueidis v1.0.75
 	github.com/riferrei/srclient v0.7.4
 	github.com/segmentio/kafka-go v0.4.51
+	github.com/sony/gobreaker v1.0.0
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go v0.42.0
 	github.com/testcontainers/testcontainers-go/modules/kafka v0.42.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.42.0
+	golang.org/x/time v0.15.0
 )
 
 require (
