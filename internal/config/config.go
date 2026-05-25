@@ -31,7 +31,8 @@ type Config struct {
 
 	UseKafka     bool     `env:"USE_KAFKA" envDefault:"true"`
 	KafkaBrokers []string `env:"KAFKA_BROKERS" envSeparator:"," envDefault:"localhost:9092,localhost:9094,localhost:9095"`
-	KafkaTopic   string   `env:"KAFKA_TOPIC" envDefault:"link.updates"`
+
+	KafkaTopic string `env:"KAFKA_TOPIC" envDefault:"link.updates"`
 
 	KafkaGroupID      string `env:"KAFKA_GROUP_ID" envDefault:"link-tracker-bot-group"`
 	KafkaRetries      int    `env:"KAFKA_RETRIES" envDefault:"3"`
@@ -55,6 +56,16 @@ type Config struct {
 
 	RateLimitRPS   float64 `env:"RATE_LIMIT_RPS" envDefault:"10.0"`
 	RateLimitBurst int     `env:"RATE_LIMIT_BURST" envDefault:"20"`
+
+	AgentHFToken        string `env:"AGENT_HF_TOKEN" envDefault:""`
+	AgentRawTopic       string `env:"AGENT_RAW_TOPIC" envDefault:"link.raw-updates"`
+	AgentProcessedTopic string `env:"AGENT_PROCESSED_TOPIC" envDefault:"link.processed-updates"`
+	AgentGroupID        string `env:"AGENT_GROUP_ID" envDefault:"link-tracker-agent-group"`
+
+	AgentStopWords        []string `env:"AGENT_STOP_WORDS" envSeparator:"," envDefault:"spam,ads,promo"`
+	AgentExcludedAuthors  []string `env:"AGENT_EXCLUDED_AUTHORS" envSeparator:"," envDefault:"bot-user,spammer"`
+	AgentMinLength        int      `env:"AGENT_MIN_LENGTH" envDefault:"20"`
+	AgentSummaryThreshold int      `env:"AGENT_SUMMARY_THRESHOLD" envDefault:"500"`
 }
 
 func (c *Config) DatabaseDSN() string {
