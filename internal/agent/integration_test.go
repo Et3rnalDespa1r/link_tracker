@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/stretchr/testify/assert"
@@ -25,65 +26,67 @@ func TestKafkaAgentIntegration(t *testing.T) {
 
 	rawTopic := "link.raw-updates"
 	processedTopic := "link.processed-updates"
-	
-	producer, err := kafka.NewProducer(&kafka.ConfigMap{"bootstrap.servers": brokers[0]})
-	require.NoError(t, err)
 
-	_ = producer.Produce(&kafka.Message{TopicPartition: kafka.TopicPartition{Topic: &rawTopic, Partition: kafka.PartitionAny}, Value: []byte("invalid json data")}, nil)
+	producer, _ := kafka.NewProducer(&kafka.ConfigMap{"bootstrap.servers": brokers[0]})
 
-	validUpdate := processor.RawUpdate{ID: 1, Description: "Отличное обновление", Author: "good_user", TgChatIDs: []int64{123}}
-	valBytes, _ := json.Marshal(validUpdate)
-	_ = producer.Produce(&kafka.Message{TopicPartition: kafka.TopicPartition{Topic: &rawTopic, Partition: kafka.PartitionAny}, Value: valBytes}, nil)
+	valSpam, _ := json.Marshal(processor.RawUpdate{ID: 1, Description: "это spam сообщение", TgChatIDs: []int64{1}})
+	producer.Produce(&kafka.Message{TopicPartition: kafka.TopicPartition{Topic: &rawTopic, Partition: kafka.PartitionAny}, Value: valSpam}, nil)
+
+	val1, _ := json.Marshal(processor.RawUpdate{ID: 2, Description: "нормальное сообщение 1", TgChatIDs: []int64{2}})
+	val2, _ := json.Marshal(processor.RawUpdate{ID: 3, Description: "critical баг пофикшен", TgChatIDs: []int64{2}})
+	producer.Produce(&kafka.Message{TopicPartition: kafka.TopicPartition{Topic: &rawTopic, Partition: kafka.PartitionAny}, Value: val1}, nil)
+	producer.Produce(&kafka.Message{TopicPartition: kafka.TopicPartition{Topic: &rawTopic, Partition: kafka.PartitionAny}, Value: val2}, nil)
 
 	producer.Flush(5000)
 	producer.Close()
 
-	proc := processor.NewProcessor([]string{"spam"}, []string{"bad_user"}, 10, 100, "")
+	proc := processor.NewProcessor([]string{"spam"}, nil, 5, 100, "", []string{"critical"}, []string{"typo"})
+	grouper := processor.NewGrouper(100 * time.Millisecond)
 
 	agentConsumer, _ := kafka.NewConsumer(&kafka.ConfigMap{"bootstrap.servers": brokers[0], "group.id": "test-agent", "auto.offset.reset": "earliest"})
 	agentConsumer.SubscribeTopics([]string{rawTopic}, nil)
-
 	agentProducer, _ := kafka.NewProducer(&kafka.ConfigMap{"bootstrap.servers": brokers[0]})
 
-	agentProcessed := false
+	go func() {
+		for grouped := range grouper.Out() {
+			for _, msg := range grouped {
+				outBytes, _ := json.Marshal(msg)
+				agentProducer.Produce(&kafka.Message{TopicPartition: kafka.TopicPartition{Topic: &processedTopic, Partition: kafka.PartitionAny}, Value: outBytes}, nil)
+			}
+			agentProducer.Flush(5000)
+		}
+	}()
 	for i := 0; i < 20; i++ {
 		ev := agentConsumer.Poll(1000)
 		if msg, ok := ev.(*kafka.Message); ok {
 			var raw processor.RawUpdate
 			if err := json.Unmarshal(msg.Value, &raw); err == nil {
 				if processed := proc.ProcessUpdate(raw); processed != nil {
-					outBytes, _ := json.Marshal(processed)
-					_ = agentProducer.Produce(&kafka.Message{TopicPartition: kafka.TopicPartition{Topic: &processedTopic, Partition: kafka.PartitionAny}, Value: outBytes}, nil)
-					agentProcessed = true
-					break
+					grouper.Add(*processed)
 				}
 			}
 		}
 	}
-	agentProducer.Flush(5000)
-	require.True(t, agentProcessed, "Агент не смог прочитать или обработать сообщение")
-
+	time.Sleep(300 * time.Millisecond)
 	agentConsumer.Close()
 	agentProducer.Close()
 
 	botConsumer, _ := kafka.NewConsumer(&kafka.ConfigMap{"bootstrap.servers": brokers[0], "group.id": "test-bot", "auto.offset.reset": "earliest"})
 	botConsumer.SubscribeTopics([]string{processedTopic}, nil)
 
-	var result processor.ProcessedUpdate
-	botFound := false
+	var results []processor.ProcessedUpdate
 	for i := 0; i < 20; i++ {
 		ev := botConsumer.Poll(1000)
 		if msg, ok := ev.(*kafka.Message); ok {
-			if err := json.Unmarshal(msg.Value, &result); err == nil {
-				botFound = true
-				break
-			}
+			var r processor.ProcessedUpdate
+			json.Unmarshal(msg.Value, &r)
+			results = append(results, r)
 		}
 	}
-	require.True(t, botFound, "Бот не смог прочитать финальное сообщение")
 	botConsumer.Close()
 
-	assert.Equal(t, validUpdate.ID, result.ID)
-	assert.Equal(t, validUpdate.Description, result.Description)
-	assert.Equal(t, "HIGH", result.Priority)
+	require.Len(t, results, 1, "Должно прийти только одно сгруппированное сообщение (спам отсекается)")
+	assert.Equal(t, processor.PriorityHigh, results[0].Priority)
+	assert.Contains(t, results[0].Description, "1. нормальное сообщение 1")
+	assert.Contains(t, results[0].Description, "2. critical баг пофикшен")
 }

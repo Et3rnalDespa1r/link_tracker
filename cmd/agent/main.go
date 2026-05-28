@@ -28,7 +28,11 @@ func main() {
 		cfg.AgentMinLength,
 		cfg.AgentSummaryThreshold,
 		cfg.AgentHFToken,
+		cfg.AgentHighKeywords,
+		cfg.AgentLowKeywords,
 	)
+
+	grouper := processor.NewGrouper(cfg.AgentGroupWindow)
 
 	brokers := strings.Join(cfg.KafkaBrokers, ",")
 
@@ -58,6 +62,29 @@ func main() {
 		os.Exit(1)
 	}
 
+	go func() {
+		for groupedBatch := range grouper.Out() {
+			for _, msg := range groupedBatch {
+				valBytes, err := json.Marshal(msg)
+				if err != nil {
+					logger.Error("Ошибка сериализации", "error", err)
+					continue
+				}
+
+				topic := cfg.AgentProcessedTopic
+				err = producer.Produce(&kafka.Message{
+					TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
+					Value:          valBytes,
+				}, nil)
+				if err != nil {
+					logger.Error("Ошибка отправки в Kafka", "error", err)
+				}
+			}
+			producer.Flush(5000)
+			logger.Info("Отправлен сгруппированный батч сообщений", "count", len(groupedBatch))
+		}
+	}()
+
 	sigchan := make(chan os.Signal, 1)
 	signal.Notify(sigchan, syscall.SIGINT, syscall.SIGTERM)
 
@@ -84,28 +111,10 @@ func main() {
 				}
 
 				processed := proc.ProcessUpdate(raw)
-				if processed == nil {
-					logger.Info("Обновление отфильтровано", "id", raw.ID)
-					continue
-				}
-
-				outBytes, err := json.Marshal(processed)
-				if err != nil {
-					logger.Error("Ошибка сериализации результата", "error", err)
-					continue
-				}
-
-				topic := cfg.AgentProcessedTopic
-				err = producer.Produce(&kafka.Message{
-					TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
-					Key:            e.Key,
-					Value:          outBytes,
-				}, nil)
-
-				if err != nil {
-					logger.Error("Ошибка отправки в Kafka", "error", err)
+				if processed != nil {
+					grouper.Add(*processed)
 				} else {
-					logger.Info("Обновление успешно отправлено", "id", processed.ID, "priority", processed.Priority)
+					logger.Info("Обновление отфильтровано", "id", raw.ID)
 				}
 
 			case kafka.Error:

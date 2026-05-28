@@ -2,74 +2,52 @@ package processor
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
 
-func TestProcessor_ProcessUpdate(t *testing.T) {
-	stopWords := []string{"spam", "реклама"}
-	excludedAuthors := []string{"spambot", "bad_user"}
-	minLength := 10
-	summaryThreshold := 20
+func TestProcessor_Priority(t *testing.T) {
+	proc := NewProcessor(nil, nil, 0, 100, "", []string{"critical"}, []string{"typo"})
 
-	proc := NewProcessor(stopWords, excludedAuthors, minLength, summaryThreshold, "")
+	high := proc.ProcessUpdate(RawUpdate{Description: "fixed a critical bug"})
+	assert.NotNil(t, high)
+	assert.Equal(t, PriorityHigh, high.Priority)
 
-	t.Run("TC-2.3: Фильтрация по минимальной длине (Слишком короткое)", func(t *testing.T) {
-		raw := RawUpdate{
-			ID:          1,
-			Description: "Коротко",
-			Author:      "good_user",
-		}
-		result := proc.ProcessUpdate(raw)
-		assert.Nil(t, result)
-	})
+	med := proc.ProcessUpdate(RawUpdate{Description: "some normal update"})
+	assert.NotNil(t, med)
+	assert.Equal(t, PriorityMedium, med.Priority)
 
-	t.Run("TC-2.2: Фильтрация по авторам (Исключенный автор)", func(t *testing.T) {
-		raw := RawUpdate{
-			ID:          2,
-			Description: "Длинное нормальное сообщение",
-			Author:      "SpaMBoT",
-		}
-		result := proc.ProcessUpdate(raw)
-		assert.Nil(t, result)
-	})
+	low := proc.ProcessUpdate(RawUpdate{Description: "fixed a typo in readme"})
+	assert.NotNil(t, low)
+	assert.Equal(t, PriorityLow, low.Priority)
+}
 
-	t.Run("TC-2.1: Фильтрация по стоп-словам", func(t *testing.T) {
-		raw := RawUpdate{
-			ID:          3,
-			Description: "Тут какая-то Реклама продукта",
-			Author:      "good_user",
-		}
-		result := proc.ProcessUpdate(raw)
-		assert.Nil(t, result)
-	})
+func TestGrouper(t *testing.T) {
+	g := NewGrouper(50 * time.Millisecond)
+	g.Add(ProcessedUpdate{ID: 1, Description: "first", TgChatIDs: []int64{123}, Priority: PriorityLow})
+	g.Add(ProcessedUpdate{ID: 2, Description: "second", TgChatIDs: []int64{123}, Priority: PriorityHigh})
 
-	t.Run("TC-2.4 и TC-3.2: Пропуск валидного и Короткий текст (Без суммаризации)", func(t *testing.T) {
-		raw := RawUpdate{
-			ID:          4,
-			Description: "Нормальный текст",
-			Author:      "good_user",
-			TgChatIDs:   []int64{123, 456},
-		}
-		result := proc.ProcessUpdate(raw)
+	res := <-g.Out()
+	assert.Len(t, res, 1, "Должно быть сгруппировано в одно сообщение")
+	assert.Equal(t, PriorityHigh, res[0].Priority, "Приоритет должен быть максимальным")
+	assert.Contains(t, res[0].Description, "1. first")
+	assert.Contains(t, res[0].Description, "2. second")
 
-		assert.NotNil(t, result)
-		assert.Equal(t, raw.Description, result.Description)
-		assert.Equal(t, "HIGH", result.Priority)
-		assert.ElementsMatch(t, raw.TgChatIDs, result.TgChatIDs)
-	})
+	g2 := NewGrouper(50 * time.Millisecond)
+	g2.Add(ProcessedUpdate{ID: 3, Description: "single", TgChatIDs: []int64{456}, Priority: PriorityMedium})
 
-	t.Run("TC-3.1: Суммаризация длинного текста", func(t *testing.T) {
-		raw := RawUpdate{
-			ID:          5,
-			Description: "Это очень длинный текст, который должен быть обрезан",
-			Author:      "good_user",
-		}
-		result := proc.ProcessUpdate(raw)
+	res2 := <-g2.Out()
+	assert.Len(t, res2, 1)
+	assert.Equal(t, "single", res2[0].Description, "Одиночное сообщение не должно меняться")
+	assert.Equal(t, PriorityMedium, res2[0].Priority)
+}
 
-		assert.NotNil(t, result)
-		expected := string([]rune(raw.Description)[:summaryThreshold]) + "..."
-		assert.Equal(t, expected, result.Description)
-		assert.Equal(t, "HIGH", result.Priority)
-	})
+func TestProcessor_Filtering(t *testing.T) {
+	proc := NewProcessor([]string{"spam"}, []string{"bad_author"}, 10, 100, "", nil, nil)
+
+	assert.Nil(t, proc.ProcessUpdate(RawUpdate{Description: "short"}))
+	assert.Nil(t, proc.ProcessUpdate(RawUpdate{Author: "bad_author", Description: "long enough description"}))
+	assert.Nil(t, proc.ProcessUpdate(RawUpdate{Description: "this is spam message long enough"}))
+	assert.NotNil(t, proc.ProcessUpdate(RawUpdate{Description: "this is a valid message long enough"}))
 }

@@ -62,10 +62,13 @@ type Config struct {
 	AgentProcessedTopic string `env:"AGENT_PROCESSED_TOPIC" envDefault:"link.processed-updates"`
 	AgentGroupID        string `env:"AGENT_GROUP_ID" envDefault:"link-tracker-agent-group"`
 
-	AgentStopWords        []string `env:"AGENT_STOP_WORDS" envSeparator:"," envDefault:"spam,ads,promo"`
-	AgentExcludedAuthors  []string `env:"AGENT_EXCLUDED_AUTHORS" envSeparator:"," envDefault:"bot-user,spammer"`
-	AgentMinLength        int      `env:"AGENT_MIN_LENGTH" envDefault:"20"`
-	AgentSummaryThreshold int      `env:"AGENT_SUMMARY_THRESHOLD" envDefault:"500"`
+	AgentStopWords        []string      `env:"AGENT_STOP_WORDS" envSeparator:"," envDefault:"spam,ads,promo"`
+	AgentExcludedAuthors  []string      `env:"AGENT_EXCLUDED_AUTHORS" envSeparator:"," envDefault:"bot-user,spammer"`
+	AgentMinLength        int           `env:"AGENT_MIN_LENGTH" envDefault:"20"`
+	AgentSummaryThreshold int           `env:"AGENT_SUMMARY_THRESHOLD" envDefault:"500"`
+	AgentHighKeywords     []string      `env:"AGENT_HIGH_KEYWORDS" envSeparator:"," envDefault:"critical,urgent,breaking,security"`
+	AgentLowKeywords      []string      `env:"AGENT_LOW_KEYWORDS" envSeparator:"," envDefault:"minor,typo,chore,docs"`
+	AgentGroupWindow      time.Duration `env:"AGENT_GROUP_WINDOW" envDefault:"30s"`
 }
 
 func (c *Config) DatabaseDSN() string {
