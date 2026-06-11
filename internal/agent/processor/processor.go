@@ -88,7 +88,6 @@ func (p *Processor) ProcessUpdate(raw RawUpdate) *ProcessedUpdate {
 		}
 	}
 
-	// FR-1: Приоритизация
 	priority := PriorityMedium
 	for _, word := range p.highKeywords {
 		if strings.Contains(lowerDesc, word) {

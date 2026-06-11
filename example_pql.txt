@@ -1,0 +1,24 @@
+# 1. Потребление RAM
+process_resident_memory_bytes{job=~"$app"}
+
+# 2. Scrapper: Количество активных ссылок
+sum(links_on_track_total{job=~"$app"}) by (tracked_source)
+
+# 3. Scrapper: API Requests (Rate)
+sum(rate(api_requests_total{job=~"$app"}[5m])) by (source)
+
+# 4. Scrapper: Перцентили времени scrape (50, 95, 99)
+histogram_quantile(0.50, sum(rate(request_duration_ms_total_bucket{job=~"$app"}[5m])) by (le, scope, scope_type))
+histogram_quantile(0.95, sum(rate(request_duration_ms_total_bucket{job=~"$app"}[5m])) by (le, scope, scope_type))
+histogram_quantile(0.99, sum(rate(request_duration_ms_total_bucket{job=~"$app"}[5m])) by (le, scope, scope_type))
+
+# 5. Bot: Команды (Rate)
+sum(rate(command_requests_total{job=~"$app"}[5m])) by (command)
+
+# 6. Bot: Перцентили времени обработки команд (50, 95, 99)
+histogram_quantile(0.50, sum(rate(command_duration_ms_total_bucket{job=~"$app"}[5m])) by (le, scope, scope_type))
+histogram_quantile(0.95, sum(rate(command_duration_ms_total_bucket{job=~"$app"}[5m])) by (le, scope, scope_type))
+histogram_quantile(0.99, sum(rate(command_duration_ms_total_bucket{job=~"$app"}[5m])) by (le, scope, scope_type))
+
+# 7. Bot: Отправленные нотификации
+sum(sent_notification_total{job=~"$app"})

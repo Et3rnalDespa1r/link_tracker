@@ -7,11 +7,15 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"sync"
+	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/config"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/cache"
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/metrics"
 	"golang.org/x/time/rate"
 
 	coreDomain "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/domain"
@@ -94,6 +98,8 @@ func NewScrapperServer(cfg *config.Config, logger *slog.Logger, respCache *cache
 	mux.HandleFunc("DELETE /links", s.handleRemoveLink)
 	mux.HandleFunc("GET /links", s.handleGetLinks)
 
+	mux.Handle("GET /metrics", promhttp.Handler())
+
 	limiter := NewIPRateLimiter(rate.Limit(cfg.RateLimitRPS), cfg.RateLimitBurst)
 	handlerWithRateLimit := rateLimitMiddleware(limiter, mux)
 
@@ -119,14 +125,18 @@ func (s *ScrapperServer) Stop(ctx context.Context) error {
 }
 
 func (s *ScrapperServer) handleRegisterChat(w http.ResponseWriter, r *http.Request) {
+	metrics.ApiRequests.WithLabelValues("tg_bot").Inc()
 	w.WriteHeader(http.StatusOK)
 }
 
 func (s *ScrapperServer) handleDeleteChat(w http.ResponseWriter, r *http.Request) {
+	metrics.ApiRequests.WithLabelValues("tg_bot").Inc()
 	w.WriteHeader(http.StatusOK)
 }
 
 func (s *ScrapperServer) handleGetLinks(w http.ResponseWriter, r *http.Request) {
+	metrics.ApiRequests.WithLabelValues("tg_bot").Inc()
+
 	chatID, _ := strconv.ParseInt(r.Header.Get("Tg-Chat-Id"), 10, 64)
 
 	cachedBytes, err := s.cache.GetList(r.Context(), chatID)
@@ -137,7 +147,11 @@ func (s *ScrapperServer) handleGetLinks(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	start := time.Now()
 	links, err := s.repo.GetLinks(r.Context(), chatID)
+	duration := time.Since(start).Milliseconds()
+	metrics.RequestDuration.WithLabelValues("database", "links_table").Observe(float64(duration))
+
 	if err != nil {
 		s.logger.Error("Ошибка получения ссылок из БД", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -166,6 +180,8 @@ type linkRequest struct {
 }
 
 func (s *ScrapperServer) handleAddLink(w http.ResponseWriter, r *http.Request) {
+	metrics.ApiRequests.WithLabelValues("tg_bot").Inc()
+
 	chatID, _ := strconv.ParseInt(r.Header.Get("Tg-Chat-Id"), 10, 64)
 
 	var req linkRequest
@@ -174,12 +190,20 @@ func (s *ScrapperServer) handleAddLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	start := time.Now()
 	linkToSave := coreDomain.Link{URL: req.Link}
-	if err := s.repo.AddLink(r.Context(), chatID, linkToSave); err != nil {
+	err := s.repo.AddLink(r.Context(), chatID, linkToSave)
+	duration := time.Since(start).Milliseconds()
+	metrics.RequestDuration.WithLabelValues("database", "links_table").Observe(float64(duration))
+
+	if err != nil {
 		s.logger.Error("Ошибка добавления в БД", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+
+	source := getSourceFromURL(req.Link)
+	metrics.LinksOnTrack.WithLabelValues(source).Inc()
 
 	_ = s.cache.Invalidate(r.Context(), chatID)
 
@@ -188,6 +212,8 @@ func (s *ScrapperServer) handleAddLink(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *ScrapperServer) handleRemoveLink(w http.ResponseWriter, r *http.Request) {
+	metrics.ApiRequests.WithLabelValues("tg_bot").Inc()
+
 	chatID, _ := strconv.ParseInt(r.Header.Get("Tg-Chat-Id"), 10, 64)
 
 	var req linkRequest
@@ -196,14 +222,30 @@ func (s *ScrapperServer) handleRemoveLink(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if err := s.repo.RemoveLink(r.Context(), chatID, req.Link); err != nil {
+	start := time.Now()
+	err := s.repo.RemoveLink(r.Context(), chatID, req.Link)
+	duration := time.Since(start).Milliseconds()
+	metrics.RequestDuration.WithLabelValues("database", "links_table").Observe(float64(duration))
+
+	if err != nil {
 		s.logger.Error("Ошибка удаления из БД", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
+	source := getSourceFromURL(req.Link)
+	metrics.LinksOnTrack.WithLabelValues(source).Dec()
+
 	_ = s.cache.Invalidate(r.Context(), chatID)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(scrapDomain.LinkResponse{ID: 0, URL: req.Link})
+}
+
+func getSourceFromURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "unknown"
+	}
+	return u.Host
 }

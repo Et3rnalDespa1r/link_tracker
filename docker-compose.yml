@@ -35,6 +35,7 @@ services:
         echo 'Ждем поднятия нод...' && sleep 5 &&
         echo 'yes' | valkey-cli --cluster create valkey-node-0:6379 valkey-node-1:6380 valkey-node-2:6381 --cluster-replicas 0
       "
+
   postgres:
     image: postgres:15-alpine
     container_name: link_tracker_db
@@ -158,8 +159,43 @@ services:
       - kafka-2
       - kafka-3
 
+  # --- MONITORING STACK ---
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    depends_on:
+      - pushgateway
+
+  pushgateway:
+    image: prom/pushgateway:latest
+    container_name: pushgateway
+    ports:
+      - "9091:9091"
+
+  grafana:
+    image: grafana/grafana-oss:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
 volumes:
   postgres_data:
   valkey_data_0:
   valkey_data_1:
   valkey_data_2:
+  prometheus_data:
+  grafana_data:

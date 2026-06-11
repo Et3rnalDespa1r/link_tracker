@@ -11,6 +11,8 @@ import (
 
 	"github.com/go-co-op/gocron"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/push"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/config"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/cache"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/repository/postgres"
@@ -88,6 +90,23 @@ func main() {
 
 	respCache := cache.NewResponseCache(valkeyClient, cfg.ValkeyCacheTTL)
 	httpServer := http.NewScrapperServer(cfg.ServerAddress, cfg.RateLimitRPS, cfg.RateLimitBurst, logger, respCache, repo)
+
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				err := push.New("http://localhost:9091", "scrapper").
+					Gatherer(prometheus.DefaultGatherer).
+					Push()
+				if err != nil {
+				}
+			}
+		}
+	}()
 
 	errCh := make(chan error, 1)
 
