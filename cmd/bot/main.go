@@ -4,16 +4,20 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/prometheus/client_golang/prometheus/push"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/application"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/config"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/db"
-	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/http"
+	infraHttp "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/http"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/kafka"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/repository/postgres"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/telegram"
@@ -32,6 +36,33 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	go func() {
+		metricsMux := http.NewServeMux()
+		metricsMux.Handle("/metrics", promhttp.Handler())
+		logger.Info("Запуск сервера метрик для Bot", "port", "8011")
+		if err := http.ListenAndServe(":8011", metricsMux); err != nil && err != http.ErrServerClosed {
+			logger.Error("Ошибка сервера метрик Bot", "error", err)
+		}
+	}()
+
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				err := push.New("http://localhost:9091", "bot").
+					Gatherer(prometheus.DefaultGatherer).
+					Push()
+				if err != nil {
+					logger.Error("Ошибка отправки метрик в Pushgateway", "error", err)
+				}
+			}
+		}
+	}()
 
 	if err := db.RunMigrations(cfg.DatabaseDSN(), logger); err != nil {
 		logger.Error("Ошибка при запуске миграций", slog.Any("error", err))
@@ -94,7 +125,7 @@ func main() {
 		logger.Info("Бот готов принимать обновления по HTTP")
 	}
 
-	httpServer := http.NewBotServer(cfg.BotAddress, botService, logger)
+	httpServer := infraHttp.NewBotServer(cfg.BotAddress, botService, logger)
 
 	errCh := make(chan error, 2)
 

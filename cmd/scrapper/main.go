@@ -11,7 +11,10 @@ import (
 
 	"github.com/go-co-op/gocron"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/push"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/config"
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/cache"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/repository/postgres"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/client"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/client/kafka"
@@ -41,41 +44,41 @@ func main() {
 	defer pool.Close()
 
 	repo := postgres.NewSqlLinkRepository(pool)
-	var sender updater.UpdateSender
 
-	if cfg.UseKafka {
-		schemaRegistryURL := "http://localhost:8081"
-		kafkaProducer, err := kafka.NewProducer(cfg.KafkaBrokers, cfg.KafkaTopic, schemaRegistryURL)
-		if err != nil {
-			logger.Error("Не удалось создать Avro Producer", "error", err)
-			os.Exit(1)
-		}
+	valkeyClient, err := cache.NewValkeyClient(cfg.ValkeyAddresses, logger)
+	if err != nil {
+		logger.Error("Не удалось инициализировать Valkey", "error", err)
+	} else {
+		defer valkeyClient.Close()
+	}
 
+	botClient := client.NewBotClient(cfg.BotURL)
+	var sender updater.UpdateSender = botClient
+	logger.Info("Скраппер запущен. Основной транспорт: HTTP", slog.String("url", cfg.BotURL))
+
+	schemaRegistryURL := cfg.SchemaRegistryURL
+	kafkaProducer, err := kafka.NewProducer(cfg.KafkaBrokers, cfg.KafkaTopic, schemaRegistryURL)
+	if err != nil {
+		logger.Error("Не удалось создать Avro Producer для Fallback", "error", err)
+	} else {
 		defer func() {
 			if err := kafkaProducer.Close(); err != nil {
-				logger.Error("Ошибка закрытия Kafka продюсера", "error", err)
+				logger.Error("Ошибка закрытия Kafka", "error", err)
 			}
 		}()
-		sender = kafkaProducer
 
 		outboxRepo := postgres.NewOutboxRepository(pool)
 		outboxProcessor := kafka.NewOutboxProcessor(outboxRepo, kafkaProducer, logger)
 		go outboxProcessor.Run(ctx)
-
-		logger.Info("Скраппер запущен. Уведомления отправляются через Kafka (Outbox + Avro)", slog.Any("brokers", cfg.KafkaBrokers))
-	} else {
-		botClient := client.NewBotClient(cfg.BotURL)
-		sender = botClient
-		logger.Info("Скраппер запущен. Уведомления отправляются через HTTP", slog.String("url", cfg.BotURL))
+		logger.Info("Fallback-транспорт запущен: Kafka Outbox", slog.Any("brokers", cfg.KafkaBrokers))
 	}
 
-	githubClient := client.NewGithubClient("https://api.github.com", cfg.GithubToken)
-	soClient := client.NewStackOverflowClient("https://api.stackexchange.com/2.3")
+	githubClient := client.NewGithubClient("https://api.github.com", cfg.GithubToken, cfg)
+	soClient := client.NewStackOverflowClient("https://api.stackexchange.com/2.3", cfg)
 
 	updateSvc := updater.NewUpdater(sender, repo, cfg, logger, githubClient, soClient)
 
 	scheduler := gocron.NewScheduler(time.UTC)
-
 	_, err = scheduler.Every(cfg.CheckInterval).Do(func() {
 		updateSvc.ProcessUpdates(ctx)
 	})
@@ -85,7 +88,25 @@ func main() {
 	}
 	scheduler.StartAsync()
 
-	httpServer := http.NewScrapperServer(cfg.ServerAddress, logger)
+	respCache := cache.NewResponseCache(valkeyClient, cfg.ValkeyCacheTTL)
+	httpServer := http.NewScrapperServer(cfg.ServerAddress, cfg.RateLimitRPS, cfg.RateLimitBurst, logger, respCache, repo)
+
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				err := push.New("http://localhost:9091", "scrapper").
+					Gatherer(prometheus.DefaultGatherer).
+					Push()
+				if err != nil {
+				}
+			}
+		}
+	}()
 
 	errCh := make(chan error, 1)
 

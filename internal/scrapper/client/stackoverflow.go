@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/config"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/domain"
 )
 
@@ -24,13 +25,13 @@ type SOAnswerResponse struct {
 
 type StackOverflowClient struct {
 	baseURL string
-	client  *http.Client
+	client  *ResilientHTTPClient
 }
 
-func NewStackOverflowClient(baseURL string) *StackOverflowClient {
+func NewStackOverflowClient(baseURL string, cfg *config.Config) *StackOverflowClient {
 	return &StackOverflowClient{
 		baseURL: baseURL,
-		client:  &http.Client{Timeout: 10 * time.Second},
+		client:  NewResilientHTTPClient(cfg, "stackoverflow"),
 	}
 }
 

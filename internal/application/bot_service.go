@@ -6,8 +6,10 @@ import (
 	"log/slog"
 	"net/url"
 	"strings"
+	"time"
 
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/domain"
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/metrics"
 )
 
 const (
@@ -56,12 +58,22 @@ func (s *BotService) Notify(ctx context.Context, update domain.LinkUpdate) error
 		msg := fmt.Sprintf("🔔 Обновление по ссылке: %s\n%s", update.URL, update.Description)
 		if err := s.sender.SendMessage(chatID, msg); err != nil {
 			s.logger.Error("Не удалось отправить уведомление", "chat_id", chatID, "error", err)
+		} else {
+			metrics.SentNotifications.Inc()
 		}
 	}
 	return nil
 }
 
 func (s *BotService) HandleCommand(ctx context.Context, chatID int64, command, args string) string {
+	metrics.CommandRequests.WithLabelValues(command).Inc()
+
+	start := time.Now()
+	defer func() {
+		duration := time.Since(start).Milliseconds()
+		metrics.BotCommandDuration.WithLabelValues("bot_command", command).Observe(float64(duration))
+	}()
+
 	s.states[chatID] = domain.StateNone
 	delete(s.tempLinks, chatID)
 
@@ -95,6 +107,7 @@ func (s *BotService) HandleCommand(ctx context.Context, chatID int64, command, a
 }
 
 func (s *BotService) HandleText(ctx context.Context, chatID int64, text string) string {
+
 	state := s.states[chatID]
 
 	switch state {
