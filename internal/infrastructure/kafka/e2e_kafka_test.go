@@ -109,3 +109,29 @@ func TestE2E_ScraperToBot_ViaKafka(t *testing.T) {
 		return len(mockTgBot.Received) > 0
 	}, 20*time.Second, 1*time.Second)
 }
+
+func TestConsumerDiscoversTopicCreatedAfterStartup(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	container, err := tcKafka.RunContainer(ctx)
+	require.NoError(t, err)
+	defer container.Terminate(context.Background())
+	brokers, err := container.Brokers(ctx)
+	require.NoError(t, err)
+	topic := "late.processed-updates"
+	sender := &MockTelegramBot{}
+	consumer := botKafka.NewConsumer(brokers, topic, topic+".dlq", "late-topic-group", slog.Default(), 3, sender, "")
+	stopped := make(chan struct{})
+	go func() { defer close(stopped); consumer.Start(ctx) }()
+	defer func() { cancel(); <-stopped; consumer.Close() }()
+	// The consumer intentionally starts before either topic exists.
+	time.Sleep(time.Second)
+	connection, err := kafka.DialContext(ctx, "tcp", brokers[0])
+	require.NoError(t, err)
+	require.NoError(t, connection.CreateTopics(kafka.TopicConfig{Topic: topic, NumPartitions: 1, ReplicationFactor: 1}, kafka.TopicConfig{Topic: topic + ".dlq", NumPartitions: 1, ReplicationFactor: 1}))
+	connection.Close()
+	producer := scrapperKafka.NewJSONProducer(brokers, topic)
+	defer producer.Close()
+	require.NoError(t, producer.SendUpdate(ctx, scrapDomain.LinkUpdate{ID: 1, URL: "https://github.com/test/late", Description: "late topic notification", TgChatIDs: []int64{1}}))
+	require.Eventually(t, func() bool { sender.mu.Lock(); defer sender.mu.Unlock(); return len(sender.Received) == 1 }, 45*time.Second, 250*time.Millisecond)
+}

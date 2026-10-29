@@ -42,9 +42,11 @@ type Consumer struct {
 func NewConsumer(brokers []string, topic, dlqTopic, groupID string, logger *slog.Logger, retries int, bot NotificationSender, registryURL string) *Consumer {
 	return &Consumer{
 		reader: kafka.NewReader(kafka.ReaderConfig{
-			Brokers: brokers,
-			Topic:   topic,
-			GroupID: groupID,
+			Brokers:                brokers,
+			Topic:                  topic,
+			GroupID:                groupID,
+			WatchPartitionChanges:  true,
+			PartitionWatchInterval: 2 * time.Second,
 		}),
 		dlqWriter: &kafka.Writer{
 			Addr:  kafka.TCP(brokers...),
