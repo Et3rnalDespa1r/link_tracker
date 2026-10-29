@@ -2,6 +2,7 @@ package parser
 
 import (
 	"errors"
+	"net/url"
 	"strings"
 )
 
@@ -22,12 +23,15 @@ type ParsedLink struct {
 }
 
 func ParseURL(rawURL string) (ParsedLink, error) {
-	cleanURL := strings.TrimPrefix(rawURL, "https://")
-	cleanURL = strings.TrimPrefix(cleanURL, "http://")
+	u, err := url.Parse(rawURL)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil {
+		return ParsedLink{}, ErrUnsupportedLink
+	}
+	cleanURL := strings.ToLower(u.Hostname()) + u.Path
 
 	parts := strings.Split(cleanURL, "/")
 
-	if strings.HasPrefix(cleanURL, "github.com") {
+	if u.Hostname() == "github.com" {
 		if len(parts) >= 3 {
 			return ParsedLink{
 				Type:  TypeGithub,
@@ -35,7 +39,7 @@ func ParseURL(rawURL string) (ParsedLink, error) {
 				Repo:  parts[2],
 			}, nil
 		}
-	} else if strings.HasPrefix(cleanURL, "stackoverflow.com") {
+	} else if u.Hostname() == "stackoverflow.com" {
 		if len(parts) >= 3 && parts[1] == "questions" {
 			return ParsedLink{
 				Type:       TypeStackOverflow,

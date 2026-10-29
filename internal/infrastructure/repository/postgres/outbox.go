@@ -25,11 +25,12 @@ func (r *OutboxRepository) FetchPending(ctx context.Context) (map[int64][]byte, 
 	for rows.Next() {
 		var id int64
 		var payload []byte
-		if err := rows.Scan(&id, &payload); err == nil {
-			res[id] = payload
+		if err := rows.Scan(&id, &payload); err != nil {
+			return nil, err
 		}
+		res[id] = payload
 	}
-	return res, nil
+	return res, rows.Err()
 }
 
 func (r *OutboxRepository) MarkProcessed(ctx context.Context, id int64) error {

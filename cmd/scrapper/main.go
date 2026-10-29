@@ -15,7 +15,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/push"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/config"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/cache"
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/db"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/repository/postgres"
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/metrics"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/client"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/client/kafka"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/http"
@@ -36,6 +38,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	if err := db.RunMigrations(cfg.DatabaseDSN(), logger); err != nil {
+		logger.Error("Migration failed", "error", err)
+		os.Exit(1)
+	}
 	pool, err := pgxpool.New(ctx, cfg.DatabaseDSN())
 	if err != nil {
 		logger.Error("Ошибка подключения к БД", "error", err)
@@ -43,7 +49,35 @@ func main() {
 	}
 	defer pool.Close()
 
-	repo := postgres.NewSqlLinkRepository(pool)
+	var repo postgres.Repository
+	switch cfg.AccessType {
+	case "SQL":
+		repo = postgres.NewSqlLinkRepository(pool)
+	case "ORM":
+		repo = postgres.NewBuilderLinkRepository(pool)
+	default:
+		logger.Error("Invalid ACCESS_TYPE", "value", cfg.AccessType)
+		os.Exit(1)
+	}
+	go func() {
+		timer := time.NewTicker(5 * time.Second)
+		defer timer.Stop()
+		for {
+			sources, err := repo.TrackedSources(ctx)
+			if err == nil {
+				for source, count := range sources {
+					metrics.LinksOnTrack.WithLabelValues(source).Set(float64(count))
+				}
+			} else {
+				logger.Error("Tracked link metrics failed", "error", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-timer.C:
+			}
+		}
+	}()
 
 	valkeyClient, err := cache.NewValkeyClient(cfg.ValkeyAddresses, logger)
 	if err != nil {
@@ -56,10 +90,10 @@ func main() {
 	var sender updater.UpdateSender = botClient
 	logger.Info("Скраппер запущен. Основной транспорт: HTTP", slog.String("url", cfg.BotURL))
 
-	schemaRegistryURL := cfg.SchemaRegistryURL
-	kafkaProducer, err := kafka.NewProducer(cfg.KafkaBrokers, cfg.KafkaTopic, schemaRegistryURL)
-	if err != nil {
-		logger.Error("Не удалось создать Avro Producer для Fallback", "error", err)
+	kafkaProducer := kafka.NewJSONProducer(cfg.KafkaBrokers, cfg.AgentRawTopic)
+	var producerErr error
+	if producerErr != nil {
+		logger.Error("Не удалось создать Producer", "error", producerErr)
 	} else {
 		defer func() {
 			if err := kafkaProducer.Close(); err != nil {
@@ -99,7 +133,10 @@ func main() {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				err := push.New("http://localhost:9091", "scrapper").
+				if cfg.PushgatewayURL == "" {
+					continue
+				}
+				err := push.New(cfg.PushgatewayURL, "scrapper").
 					Gatherer(prometheus.DefaultGatherer).
 					Push()
 				if err != nil {

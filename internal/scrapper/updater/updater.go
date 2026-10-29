@@ -115,7 +115,6 @@ func (u *Updater) processLink(ctx context.Context, link coreDomain.Link) error {
 	}
 
 	if err != nil {
-		u.updateCheckTime(ctx, link)
 		return fmt.Errorf("ошибка запроса к API внешнего сервиса: %w", err)
 	}
 
@@ -143,12 +142,16 @@ func (u *Updater) processLink(ctx context.Context, link coreDomain.Link) error {
 				ID:          link.ID,
 				URL:         link.URL,
 				Description: description,
+				Author:      updateDetail.Author,
 				TgChatIDs:   chatIDs,
 			}
 
 			link.UpdatedAt = updateDetail.CreatedAt
 			link.LastCheckTime = time.Now()
-			
+
+			if u.cfg.UseKafka {
+				return u.repo.UpdateLinkAndSaveOutbox(ctx, link, updateReq)
+			}
 			if err := u.sender.SendUpdate(ctx, updateReq); err != nil {
 				u.logger.Warn("Основной транспорт (HTTP) недоступен. Fallback на Kafka", "error", err)
 

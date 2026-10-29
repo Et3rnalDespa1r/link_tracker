@@ -78,7 +78,7 @@ func TestResponseCache_Integration(t *testing.T) {
 	t.Run("TTL expiration", func(t *testing.T) {
 		err := respCache.SetList(ctx, chatID, testData)
 		assert.NoError(t, err)
-		
+
 		time.Sleep(3 * time.Second)
 
 		data, err := respCache.GetList(ctx, chatID)

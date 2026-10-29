@@ -106,7 +106,7 @@ func (r *BuilderLinkRepository) RemoveLink(ctx context.Context, chatID int64, ur
 }
 
 func (r *BuilderLinkRepository) GetLinks(ctx context.Context, chatID int64) ([]domain.Link, error) {
-	query, args, _ := r.psql.Select("l.url", "COALESCE(t.name, '')").
+	query, args, _ := r.psql.Select("l.id", "l.url", "COALESCE(t.name, '')").
 		From("links l").
 		Join("subscriptions s ON l.id = s.link_id").
 		LeftJoin("tags t ON s.chat_id = t.chat_id AND s.link_id = t.link_id").
@@ -120,11 +120,14 @@ func (r *BuilderLinkRepository) GetLinks(ctx context.Context, chatID int64) ([]d
 	defer rows.Close()
 
 	linkMap := make(map[string][]string)
+	ids := make(map[string]int64)
 	for rows.Next() {
+		var id int64
 		var url, tag string
-		if err := rows.Scan(&url, &tag); err != nil {
+		if err := rows.Scan(&id, &url, &tag); err != nil {
 			return nil, err
 		}
+		ids[url] = id
 		if tag != "" {
 			linkMap[url] = append(linkMap[url], tag)
 		} else if _, ok := linkMap[url]; !ok {
@@ -134,7 +137,7 @@ func (r *BuilderLinkRepository) GetLinks(ctx context.Context, chatID int64) ([]d
 
 	var result []domain.Link
 	for url, tags := range linkMap {
-		result = append(result, domain.Link{URL: url, Tags: tags})
+		result = append(result, domain.Link{ID: ids[url], URL: url, Tags: tags})
 	}
 	return result, nil
 }

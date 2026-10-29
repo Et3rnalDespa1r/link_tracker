@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/domain"
+	"net/url"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -86,7 +87,7 @@ func (r *SqlLinkRepository) RemoveLink(ctx context.Context, chatID int64, url st
 
 func (r *SqlLinkRepository) GetLinks(ctx context.Context, chatID int64) ([]domain.Link, error) {
 	query := `
-		SELECT l.url, COALESCE(t.name, '')
+		SELECT l.id, l.url, COALESCE(t.name, '')
 		FROM links l
 		JOIN subscriptions s ON l.id = s.link_id
 		LEFT JOIN tags t ON s.chat_id = t.chat_id AND s.link_id = t.link_id
@@ -99,11 +100,14 @@ func (r *SqlLinkRepository) GetLinks(ctx context.Context, chatID int64) ([]domai
 	defer rows.Close()
 
 	linkMap := make(map[string][]string)
+	ids := make(map[string]int64)
 	for rows.Next() {
+		var id int64
 		var url, tag string
-		if err := rows.Scan(&url, &tag); err != nil {
+		if err := rows.Scan(&id, &url, &tag); err != nil {
 			return nil, err
 		}
+		ids[url] = id
 		if tag != "" {
 			linkMap[url] = append(linkMap[url], tag)
 		} else if _, ok := linkMap[url]; !ok {
@@ -117,7 +121,7 @@ func (r *SqlLinkRepository) GetLinks(ctx context.Context, chatID int64) ([]domai
 
 	var result []domain.Link
 	for url, tags := range linkMap {
-		result = append(result, domain.Link{URL: url, Tags: tags})
+		result = append(result, domain.Link{ID: ids[url], URL: url, Tags: tags})
 	}
 	return result, nil
 }
@@ -206,6 +210,40 @@ func (r *SqlLinkRepository) UpdateLinkAndSaveOutbox(ctx context.Context, link do
 	if err != nil {
 		return err
 	}
-	
+
 	return tx.Commit(ctx)
+}
+
+func (r *SqlLinkRepository) RegisterChat(ctx context.Context, id int64) error {
+	_, err := r.pool.Exec(ctx, "INSERT INTO chats(id) VALUES($1) ON CONFLICT DO NOTHING", id)
+	return err
+}
+func (r *SqlLinkRepository) ChatExists(ctx context.Context, id int64) (bool, error) {
+	var exists bool
+	err := r.pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM chats WHERE id=$1)", id).Scan(&exists)
+	return exists, err
+}
+func (r *SqlLinkRepository) DeleteChat(ctx context.Context, id int64) (bool, error) {
+	result, err := r.pool.Exec(ctx, "DELETE FROM chats WHERE id=$1", id)
+	return result.RowsAffected() > 0, err
+}
+
+func (r *SqlLinkRepository) TrackedSources(ctx context.Context) (map[string]int64, error) {
+	rows, err := r.pool.Query(ctx, "SELECT url FROM links WHERE EXISTS (SELECT 1 FROM subscriptions WHERE link_id=links.id)")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := map[string]int64{"github.com": 0, "stackoverflow.com": 0}
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		u, err := url.Parse(raw)
+		if err == nil {
+			result[u.Hostname()]++
+		}
+	}
+	return result, rows.Err()
 }

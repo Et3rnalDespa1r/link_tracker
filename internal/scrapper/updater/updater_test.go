@@ -48,9 +48,10 @@ func TestUpdater_ProcessUpdates_ErrorIsolation(t *testing.T) {
 	}))
 	defer mockGithub.Close()
 
+	cfg := &config.Config{BatchSize: 2, WorkerCount: 2, HTTPTimeout: time.Second, RetryAttempts: 1, CBMinimumRequiredCalls: 5}
 	botClient := client.NewBotClient(mockBot.URL)
-	ghClient := client.NewGithubClient(mockGithub.URL, "")
-	soClient := client.NewStackOverflowClient("")
+	ghClient := client.NewGithubClient(mockGithub.URL, "", cfg)
+	soClient := client.NewStackOverflowClient("", cfg)
 
 	repo := &MockRepo{
 		links: []coreDomain.Link{
@@ -58,8 +59,6 @@ func TestUpdater_ProcessUpdates_ErrorIsolation(t *testing.T) {
 			{ID: 2, URL: "https://github.com/owner/success"},
 		},
 	}
-
-	cfg := &config.Config{BatchSize: 2, WorkerCount: 2}
 
 	svc := NewUpdater(botClient, repo, cfg, slog.Default(), ghClient, soClient)
 	svc.ProcessUpdates(context.Background())

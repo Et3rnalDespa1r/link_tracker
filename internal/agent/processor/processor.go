@@ -134,10 +134,13 @@ func (p *Processor) summarize(text string) string {
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := p.httpClient.Do(req)
-	if err != nil || resp.StatusCode != http.StatusOK {
+	if err != nil {
 		return p.fallbackSummarize(text)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return p.fallbackSummarize(text)
+	}
 
 	var result []map[string]string
 	if err := json.NewDecoder(resp.Body).Decode(&result); err == nil && len(result) > 0 {
@@ -202,10 +205,30 @@ func (g *Grouper) flush() {
 		return
 	}
 
-	groups := make(map[string][]ProcessedUpdate)
-	for _, u := range g.updates {
-		key := fmt.Sprint(u.TgChatIDs)
-		groups[key] = append(groups[key], u)
+	result := GroupUpdates(g.updates)
+
+	g.updates = nil
+	g.flushTimer = nil
+	g.outChan <- result
+}
+
+func (g *Grouper) Out() <-chan []ProcessedUpdate {
+	return g.outChan
+}
+
+func GroupUpdates(updates []ProcessedUpdate) []ProcessedUpdate {
+	groups := make(map[int64][]ProcessedUpdate)
+	for _, u := range updates {
+		seen := make(map[int64]bool)
+		for _, chatID := range u.TgChatIDs {
+			if seen[chatID] {
+				continue
+			}
+			seen[chatID] = true
+			copy := u
+			copy.TgChatIDs = []int64{chatID}
+			groups[chatID] = append(groups[chatID], copy)
+		}
 	}
 
 	var result []ProcessedUpdate
@@ -231,11 +254,5 @@ func (g *Grouper) flush() {
 		})
 	}
 
-	g.updates = nil
-	g.flushTimer = nil
-	g.outChan <- result
-}
-
-func (g *Grouper) Out() <-chan []ProcessedUpdate {
-	return g.outChan
+	return result
 }

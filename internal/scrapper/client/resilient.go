@@ -1,10 +1,13 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/metrics"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/avast/retry-go/v4"
 	"github.com/sony/gobreaker"
@@ -12,6 +15,7 @@ import (
 )
 
 type ResilientHTTPClient struct {
+	name   string
 	client *http.Client
 	cfg    *config.Config
 	cb     *gobreaker.CircuitBreaker
@@ -33,6 +37,7 @@ func NewResilientHTTPClient(cfg *config.Config, name string) *ResilientHTTPClien
 	}
 
 	return &ResilientHTTPClient{
+		name:   name,
 		client: &http.Client{},
 		cfg:    cfg,
 		cb:     gobreaker.NewCircuitBreaker(st),
@@ -49,10 +54,15 @@ func (c *ResilientHTTPClient) isRetryable(code int) bool {
 }
 
 func (c *ResilientHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	started := time.Now()
+	defer func() {
+		metrics.RequestDuration.WithLabelValues("external_source", c.name).Observe(float64(time.Since(started).Microseconds()) / 1000)
+	}()
 	var finalResp *http.Response
 
 	retryOpts := []retry.Option{
 		retry.Attempts(uint(c.cfg.RetryAttempts)),
+		retry.Context(req.Context()),
 		retry.RetryIf(func(err error) bool {
 			if err == gobreaker.ErrOpenState {
 				return false
@@ -84,6 +94,12 @@ func (c *ResilientHTTPClient) Do(req *http.Request) (*http.Response, error) {
 				return nil, fmt.Errorf("retryable http status: %d", resp.StatusCode)
 			}
 
+			data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+			resp.Body.Close()
+			if err != nil {
+				return nil, err
+			}
+			resp.Body = io.NopCloser(bytes.NewReader(data))
 			return resp, nil
 		})
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"time"
 
@@ -36,41 +35,64 @@ func NewStackOverflowClient(baseURL string, cfg *config.Config) *StackOverflowCl
 }
 
 func (c *StackOverflowClient) FetchLatestAnswer(ctx context.Context, questionID string, lastCheck time.Time) (*domain.UpdateDetail, error) {
-	url := fmt.Sprintf("%s/questions/%s/answers?site=stackoverflow&order=desc&sort=creation&filter=!6WPIomnb-D05L", c.baseURL, questionID)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("request create error: %w", err)
-	}
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request do error: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(bodyBytes))
-	}
-
-	var result SOAnswerResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode error: %w", err)
-	}
-
-	for _, item := range result.Items {
-		createdAt := time.Unix(item.CreationDate, 0)
-
-		if createdAt.After(lastCheck) {
-			return &domain.UpdateDetail{
-				Type:      "StackOverflow Answer",
-				Title:     "Новый ответ в StackOverflow",
-				Author:    item.Owner.DisplayName,
-				CreatedAt: createdAt,
-				Preview:   truncateText(item.Body, 200),
-			}, nil
+	var latest *domain.UpdateDetail
+	for _, kind := range []string{"answers", "comments"} {
+		endpoint := fmt.Sprintf("%s/questions/%s/%s?site=stackoverflow&order=desc&sort=creation&filter=withbody", c.baseURL, questionID, kind)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := c.client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		var result SOAnswerResponse
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			return nil, fmt.Errorf("StackOverflow HTTP %d", resp.StatusCode)
+		}
+		err = json.NewDecoder(resp.Body).Decode(&result)
+		resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range result.Items {
+			createdAt := time.Unix(item.CreationDate, 0)
+			if createdAt.After(lastCheck) && (latest == nil || createdAt.After(latest.CreatedAt)) {
+				eventType := "StackOverflow Answer"
+				if kind == "comments" {
+					eventType = "StackOverflow Comment"
+				}
+				latest = &domain.UpdateDetail{Type: eventType, Title: "StackOverflow question " + questionID, Author: item.Owner.DisplayName, CreatedAt: createdAt, Preview: truncateText(item.Body, 200)}
+			}
 		}
 	}
-	return nil, nil
+	if latest != nil {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/questions/%s?site=stackoverflow", c.baseURL, questionID), nil)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := c.client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		var question struct {
+			Items []struct {
+				Title string `json:"title"`
+			} `json:"items"`
+		}
+		if resp.StatusCode != 200 {
+			resp.Body.Close()
+			return nil, fmt.Errorf("StackOverflow HTTP %d", resp.StatusCode)
+		}
+		err = json.NewDecoder(resp.Body).Decode(&question)
+		resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		if len(question.Items) > 0 && question.Items[0].Title != "" {
+			latest.Title = question.Items[0].Title
+		}
+	}
+	return latest, nil
 }

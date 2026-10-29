@@ -1,73 +1,50 @@
 # LinkTracker
 
-LinkTracker – интеллектуальный агрегатор уведомлений в виде Telegram-бота, который отслеживает изменения на веб-страницах и оперативно информирует пользователя о них.
+Telegram-бот отслеживает GitHub-репозитории и вопросы Stack Overflow. Три приложения: Bot принимает команды, Scrapper проверяет источники и хранит подписки, AI Agent фильтрует, суммирует и группирует уведомления.
 
-## Архитектура проекта
+## Запуск
 
-Текущая версия проекта реализует асинхронное взаимодействие между сервисами для обеспечения отказоустойчивости и масштабируемости.
+Нужны Docker Desktop либо Docker Engine с Compose. Создайте `.env`:
 
-### Ключевые особенности:
-*   **Асинхронные уведомления:** Взаимодействие между Scrapper и Bot переведено с HTTP на **Apache Kafka**.
-*   **Паттерн Transactional Outbox:** Гарантирует доставку сообщений даже при временной недоступности брокера. События сохраняются в PostgreSQL в одной транзакции с бизнес-данными.
-*   **Avro & Schema Registry:** Строгая типизация контрактов с использованием Avro-схем и централизованного хранилища Schema Registry.
-*   **Надежный Consumer:** Реализованы повторные попытки обработки (Retry) и механизм **Dead Letter Queue (DLQ)** для изоляции некорректных сообщений.
-
----
-
-## Настройка окружения
-
-1.  **Файл .env:** Создайте файл `.env` в корневой директории и настройте параметры:
-    ```env
-    # Telegram
-    APP_TELEGRAM_TOKEN=ваш_токен_бота
-
-    # Database
-    DB_HOST=localhost
-    DB_PORT=5432
-    DB_USER=postgres
-    DB_PASSWORD=your_password
-    DB_NAME=linktracker
-
-    # Kafka
-    USE_KAFKA=true
-    KAFKA_BROKERS=localhost:9092,localhost:9093,localhost:9094
-    KAFKA_TOPIC=link.updates
-    SCHEMA_REGISTRY_URL=http://localhost:8081
-    ```
-
-2.  **Запуск инфраструктуры:**
-Для поднятия PostgreSQL, Schema Registry и отказоустойчивого кластера Kafka (3 брокера) выполните:
-    
-```bash
-    docker-compose up -d
+```env
+APP_TELEGRAM_TOKEN=токен_от_BotFather
+DB_PASSWORD=password
 ```
 
-
-## Запуск сервисов
-
-### Запуск Бота:
-```bash
-go run cmd/bot/main.go
+```sh
+docker compose -f docker-compose.yml -f compose.apps.yml up -d --build
 ```
 
-### Запуск Скраппера:
-```bash
-go run cmd/scrapper/main.go
+Приложения собираются из общего Dockerfile с параметром `SERVICE=bot|scrapper|agent`. Инфраструктура: PostgreSQL, кластер Kafka, Schema Registry, Valkey, Prometheus и Grafana. В Telegram выполните `/start`, затем `/track`, отправьте ссылку и теги либо `нет`. `/list [тег]` показывает подписки, `/untrack URL` удаляет, `/cancel` отменяет диалог.
+
+## Архитектура
+
+Bot работает с подписками через REST API Scrapper. Scrapper сохраняет изменения и событие в PostgreSQL одной транзакцией. Outbox публикует JSON с автором в `link.raw-updates`. AI Agent обрабатывает пакет в настраиваемом окне и публикует JSON в `link.processed-updates`; Bot читает результат и отправляет в Telegram. Legacy Avro producer/consumer поддерживаются и проверяются интеграционными тестами.
+
+`USE_KAFKA=false` включает HTTP-доставку Scrapper → Bot; при сбое применяется тот же Outbox. Bot слушает обработанные Kafka-сообщения и в этом режиме для fallback.
+
+Доставка at-least-once: после сбоя возможны повторы. Сначала подтверждается выходное сообщение, затем входной offset. Exactly-once доставка в Telegram не заявляется.
+
+## Разработка
+
+Go 1.25+; Kafka-клиент агента требует CGO и C-компилятор. Для запуска с хоста сначала поднимите инфраструктуру: `docker compose up -d`. PostgreSQL доступен на `localhost:5433`; Kafka — `9092,9094,9095`. Затем в отдельных терминалах:
+
+```sh
+go run ./cmd/scrapper
+go run ./cmd/agent
+go run ./cmd/bot
 ```
 
-## Тестирование
-Проект покрыт юнит-тестами и сложными интеграционными сценариями. Для тестирования используется Testcontainers, который автоматически разворачивает Kafka и Postgres в изолированных Docker-контейнерах.  
+Не публикуйте `.env`. Настройки интервала проверки, количества workers, размера батча, Kafka-топиков и фильтров агента описаны в `internal/config/config.go`.
 
-### Запуск тестов интеграции (Scrapper → Kafka → Bot):
-```bash
-go test -v ./internal/infrastructure/kafka
+## Проверки и мониторинг
+
+```sh
+go build ./cmd/...
+go vet ./...
+go test -race ./...
 ```
 
-## Настройки Kafka Topic
-Для топика уведомлений (link.updates) выбраны следующие настройки для обеспечения надежности и производительности:
+Для интеграционных тестов необходим Docker. Используются временные контейнеры PostgreSQL, Kafka и Valkey, внешние API подменяются HTTP-заглушками.
 
-Partitions: 3 — позволяет выполнять параллельную обработку сообщений несколькими экземплярами Bot-сервиса.
-
-Replication Factor: 3 — гарантирует сохранность данных даже при выходе из строя двух брокеров в кластере.
-
-Min.insync.replicas: 2 — обеспечивает необходимый уровень подтверждения записи для предотвращения потери данных.
+Grafana: http://localhost:3000, Prometheus: http://localhost:9090. Инструкция, метрики, ограничения доставки и публикация образов описаны в [OBSERVABILITY.md](OBSERVABILITY.md). JSON дашборда — `dashboard.json`, примеры PromQL — `example_pql.txt`.

@@ -11,10 +11,10 @@ import (
 )
 
 const (
-	DialTimeout     = 5 * time.Second
-	PingTimeout     = 5 * time.Second
-	InitRetryCount  = 6
-	RetryDelay      = 2 * time.Second
+	DialTimeout    = 5 * time.Second
+	PingTimeout    = 5 * time.Second
+	InitRetryCount = 6
+	RetryDelay     = 2 * time.Second
 )
 
 func NewValkeyClient(addresses []string, logger *slog.Logger) (rueidis.Client, error) {

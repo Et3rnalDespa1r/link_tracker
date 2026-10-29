@@ -10,16 +10,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/client_golang/prometheus/push"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/application"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/config"
-	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/db"
 	infraHttp "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/http"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/kafka"
-	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/repository/postgres"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/telegram"
 )
 
@@ -54,7 +51,10 @@ func main() {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				err := push.New("http://localhost:9091", "bot").
+				if cfg.PushgatewayURL == "" {
+					continue
+				}
+				err := push.New(cfg.PushgatewayURL, "bot").
 					Gatherer(prometheus.DefaultGatherer).
 					Push()
 				if err != nil {
@@ -64,29 +64,7 @@ func main() {
 		}
 	}()
 
-	if err := db.RunMigrations(cfg.DatabaseDSN(), logger); err != nil {
-		logger.Error("Ошибка при запуске миграций", slog.Any("error", err))
-		os.Exit(1)
-	}
-
-	pool, err := pgxpool.New(ctx, cfg.DatabaseDSN())
-	if err != nil {
-		logger.Error("Ошибка подключения к БД", slog.Any("error", err))
-		os.Exit(1)
-	}
-	defer pool.Close()
-
-	var repo application.LinkRepository
-	if cfg.AccessType == "SQL" {
-		repo = postgres.NewSqlLinkRepository(pool)
-		logger.Info("Используется Raw SQL репозиторий")
-	} else if cfg.AccessType == "ORM" {
-		repo = postgres.NewBuilderLinkRepository(pool)
-		logger.Info("Используется Query Builder (ORM) репозиторий")
-	} else {
-		logger.Error("Неизвестный тип доступа к БД", slog.String("ACCESS_TYPE", cfg.AccessType))
-		os.Exit(1)
-	}
+	repo := infraHttp.NewScrapperRepository(cfg.ScrapperURL, cfg.HTTPTimeout)
 
 	tgBot, err := telegram.NewBot(cfg.TelegramToken, cfg.BotTimeout, logger)
 	if err != nil {
@@ -101,12 +79,12 @@ func main() {
 		logger.Error("Не удалось установить команды меню", "error", err)
 	}
 
-	if cfg.UseKafka {
-		dlqTopic := cfg.KafkaTopic + ".dlq"
+	{ // Kafka also receives fallback notifications in HTTP mode.
+		dlqTopic := cfg.AgentProcessedTopic + ".dlq"
 
 		kafkaConsumer := kafka.NewConsumer(
 			cfg.KafkaBrokers,
-			cfg.KafkaTopic,
+			cfg.AgentProcessedTopic,
 			dlqTopic,
 			cfg.KafkaGroupID,
 			logger,
@@ -121,8 +99,6 @@ func main() {
 		}()
 
 		logger.Info("Бот слушает обновления через Kafka (Avro)", slog.Any("brokers", cfg.KafkaBrokers))
-	} else {
-		logger.Info("Бот готов принимать обновления по HTTP")
 	}
 
 	httpServer := infraHttp.NewBotServer(cfg.BotAddress, botService, logger)

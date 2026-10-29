@@ -35,7 +35,7 @@ func TestBotServer_HandleUpdates_Valid(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	server.handleUpdates(w, req)
+	server.srv.Handler.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
 }
@@ -52,7 +52,7 @@ func TestBotServer_HandleUpdates_InvalidData(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	server.handleUpdates(w, req)
+	server.srv.Handler.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }

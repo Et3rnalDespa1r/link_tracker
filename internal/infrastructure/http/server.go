@@ -103,7 +103,7 @@ func NewScrapperServer(cfg *config.Config, logger *slog.Logger, respCache *cache
 	limiter := NewIPRateLimiter(rate.Limit(cfg.RateLimitRPS), cfg.RateLimitBurst)
 	handlerWithRateLimit := rateLimitMiddleware(limiter, mux)
 
-	s.srv = &http.Server{
+	s.srv = &http.Server{ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second,
 		Addr:    cfg.ServerAddress,
 		Handler: handlerWithRateLimit,
 	}

@@ -13,11 +13,13 @@ type Config struct {
 	BotTimeout    int    `env:"BOT_TIMEOUT" envDefault:"60"`
 	BotAddress    string `env:"BOT_ADDRESS" envDefault:":8080"`
 
-	ServerAddress string `env:"SCRAPPER_ADDRESS" envDefault:":8083"`
-	BotURL        string `env:"BOT_URL" envDefault:"http://localhost:8080"`
+	ServerAddress  string `env:"SCRAPPER_ADDRESS" envDefault:":8083"`
+	ScrapperURL    string `env:"SCRAPPER_URL" envDefault:"http://localhost:8083"`
+	PushgatewayURL string `env:"PUSHGATEWAY_URL" envDefault:""`
+	BotURL         string `env:"BOT_URL" envDefault:"http://localhost:8080"`
 
 	DBHost     string `env:"DB_HOST" envDefault:"localhost"`
-	DBPort     string `env:"DB_PORT" envDefault:"5432"`
+	DBPort     string `env:"DB_PORT" envDefault:"5433"`
 	DBUser     string `env:"DB_USER" envDefault:"postgres"`
 	DBPassword string `env:"DB_PASSWORD,required"`
 	DBName     string `env:"DB_NAME" envDefault:"linktracker"`

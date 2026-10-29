@@ -1,0 +1,53 @@
+services:
+  scrapper:
+    build:
+      context: .
+      args: {SERVICE: scrapper}
+    env_file: .env
+    environment:
+      DB_HOST: postgres
+      DB_PORT: '5432'
+      DB_USER: postgres
+      DB_PASSWORD: password
+      DB_NAME: linktracker
+      KAFKA_BROKERS: kafka-1:29092,kafka-2:29092,kafka-3:29092
+      VALKEY_ADDRESSES: valkey-node-0:6379,valkey-node-1:6380,valkey-node-2:6381
+      BOT_URL: http://bot:8080
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      PUSHGATEWAY_URL: http://pushgateway:9091
+      SCRAPPER_ADDRESS: ':8083'
+      USE_KAFKA: 'true'
+    ports: ['8083:8083']
+    depends_on:
+      postgres: {condition: service_healthy}
+      kafka-init: {condition: service_completed_successfully}
+      valkey-cluster-init: {condition: service_completed_successfully}
+    restart: unless-stopped
+  bot:
+    build:
+      context: .
+      args: {SERVICE: bot}
+    env_file: .env
+    environment:
+      SCRAPPER_URL: http://scrapper:8083
+      KAFKA_BROKERS: kafka-1:29092,kafka-2:29092,kafka-3:29092
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      PUSHGATEWAY_URL: http://pushgateway:9091
+      USE_KAFKA: 'true'
+    ports: ['8080:8080', '8011:8011']
+    depends_on: [scrapper]
+    restart: unless-stopped
+  agent:
+    build:
+      context: .
+      args: {SERVICE: agent}
+    env_file: .env
+    environment:
+      KAFKA_BROKERS: kafka-1:29092,kafka-2:29092,kafka-3:29092
+    depends_on:
+      kafka-init: {condition: service_completed_successfully}
+    restart: unless-stopped
+  grafana:
+    volumes:
+      - ./monitoring/grafana:/etc/grafana/provisioning:ro
+      - ./dashboard.json:/var/lib/grafana/dashboards/linktracker.json:ro

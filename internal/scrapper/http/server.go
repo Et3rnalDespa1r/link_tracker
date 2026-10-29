@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/scrapper/parser"
 	"golang.org/x/time/rate"
 
 	coreDomain "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/domain"
@@ -75,10 +76,10 @@ type ScrapperServer struct {
 	srv    *http.Server
 	logger *slog.Logger
 	cache  *cache.ResponseCache
-	repo   *postgres.SqlLinkRepository
+	repo   postgres.Repository
 }
 
-func NewScrapperServer(address string, rps float64, burst int, logger *slog.Logger, respCache *cache.ResponseCache, repo *postgres.SqlLinkRepository) *ScrapperServer {
+func NewScrapperServer(address string, rps float64, burst int, logger *slog.Logger, respCache *cache.ResponseCache, repo postgres.Repository) *ScrapperServer {
 	mux := http.NewServeMux()
 	s := &ScrapperServer{
 		logger: logger,
@@ -97,9 +98,9 @@ func NewScrapperServer(address string, rps float64, burst int, logger *slog.Logg
 	limiter := NewIPRateLimiter(rate.Limit(rps), burst)
 	handlerWithRateLimit := rateLimitMiddleware(limiter, mux)
 
-	s.srv = &http.Server{
+	s.srv = &http.Server{ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second,
 		Addr:    address,
-		Handler: handlerWithRateLimit,
+		Handler: metrics.Instrument(handlerWithRateLimit),
 	}
 
 	return s
@@ -119,12 +120,54 @@ func (s *ScrapperServer) Stop(ctx context.Context) error {
 }
 
 func (s *ScrapperServer) handleRegisterChat(w http.ResponseWriter, r *http.Request) {
-	metrics.ApiRequests.WithLabelValues("tg_bot").Inc()
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id == 0 {
+		http.Error(w, "invalid chat id", 400)
+		return
+	}
+	if r.Method == http.MethodPost {
+		if err := s.repo.RegisterChat(r.Context(), id); err != nil {
+			http.Error(w, "database error", 500)
+			return
+		}
+	} else {
+		deleted, err := s.repo.DeleteChat(r.Context(), id)
+		if err != nil {
+			http.Error(w, "database error", 500)
+			return
+		}
+		if !deleted {
+			http.Error(w, "chat not found", 404)
+			return
+		}
+		_ = s.cache.Invalidate(r.Context(), id)
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
 func (s *ScrapperServer) handleDeleteChat(w http.ResponseWriter, r *http.Request) {
-	metrics.ApiRequests.WithLabelValues("tg_bot").Inc()
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id == 0 {
+		http.Error(w, "invalid chat id", 400)
+		return
+	}
+	if r.Method == http.MethodPost {
+		if err := s.repo.RegisterChat(r.Context(), id); err != nil {
+			http.Error(w, "database error", 500)
+			return
+		}
+	} else {
+		deleted, err := s.repo.DeleteChat(r.Context(), id)
+		if err != nil {
+			http.Error(w, "database error", 500)
+			return
+		}
+		if !deleted {
+			http.Error(w, "chat not found", 404)
+			return
+		}
+		_ = s.cache.Invalidate(r.Context(), id)
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -132,8 +175,12 @@ func (s *ScrapperServer) handleGetLinks(w http.ResponseWriter, r *http.Request) 
 	metrics.ApiRequests.WithLabelValues("tg_bot").Inc()
 
 	chatID, err := strconv.ParseInt(r.Header.Get("Tg-Chat-Id"), 10, 64)
-	if err != nil || chatID <= 0 {
+	if err != nil || chatID == 0 {
 		http.Error(w, "invalid Tg-Chat-Id header", http.StatusBadRequest)
+		return
+	}
+
+	if !s.requireChat(w, r, chatID) {
 		return
 	}
 
@@ -158,7 +205,7 @@ func (s *ScrapperServer) handleGetLinks(w http.ResponseWriter, r *http.Request) 
 
 	responseLinks := make([]scrapDomain.LinkResponse, 0, len(links))
 	for _, link := range links {
-		responseLinks = append(responseLinks, scrapDomain.LinkResponse{ID: link.ID, URL: link.URL})
+		responseLinks = append(responseLinks, scrapDomain.LinkResponse{ID: link.ID, URL: link.URL, Tags: link.Tags})
 	}
 
 	resp := scrapDomain.ListLinksResponse{Links: responseLinks, Size: len(responseLinks)}
@@ -179,8 +226,12 @@ func (s *ScrapperServer) handleAddLink(w http.ResponseWriter, r *http.Request) {
 	metrics.ApiRequests.WithLabelValues("tg_bot").Inc()
 
 	chatID, err := strconv.ParseInt(r.Header.Get("Tg-Chat-Id"), 10, 64)
-	if err != nil || chatID <= 0 {
+	if err != nil || chatID == 0 {
 		http.Error(w, "invalid Tg-Chat-Id header", http.StatusBadRequest)
+		return
+	}
+
+	if !s.requireChat(w, r, chatID) {
 		return
 	}
 
@@ -190,8 +241,12 @@ func (s *ScrapperServer) handleAddLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if _, err := parser.ParseURL(req.Link); err != nil {
+		http.Error(w, "unsupported URL", 400)
+		return
+	}
 	start := time.Now()
-	linkToSave := coreDomain.Link{URL: req.Link}
+	linkToSave := coreDomain.Link{URL: req.Link, Tags: req.Tags}
 	err = s.repo.AddLink(r.Context(), chatID, linkToSave)
 	duration := time.Since(start).Milliseconds()
 	metrics.RequestDuration.WithLabelValues("database", "links_table").Observe(float64(duration))
@@ -202,27 +257,45 @@ func (s *ScrapperServer) handleAddLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	source := getSourceFromURL(req.Link)
-	metrics.LinksOnTrack.WithLabelValues(source).Inc()
-
 	_ = s.cache.Invalidate(r.Context(), chatID)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(scrapDomain.LinkResponse{ID: 0, URL: req.Link})
+	links, _ := s.repo.GetLinks(r.Context(), chatID)
+	for _, link := range links {
+		if link.URL == req.Link {
+			json.NewEncoder(w).Encode(scrapDomain.LinkResponse{ID: link.ID, URL: link.URL, Tags: link.Tags})
+			return
+		}
+	}
+	json.NewEncoder(w).Encode(scrapDomain.LinkResponse{URL: req.Link})
 }
 
 func (s *ScrapperServer) handleRemoveLink(w http.ResponseWriter, r *http.Request) {
 	metrics.ApiRequests.WithLabelValues("tg_bot").Inc()
 
 	chatID, err := strconv.ParseInt(r.Header.Get("Tg-Chat-Id"), 10, 64)
-	if err != nil || chatID <= 0 {
+	if err != nil || chatID == 0 {
 		http.Error(w, "invalid Tg-Chat-Id header", http.StatusBadRequest)
+		return
+	}
+
+	if !s.requireChat(w, r, chatID) {
 		return
 	}
 
 	var req scrapDomain.RemoveLinkRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Link == "" {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	exists, err := s.repo.HasLink(r.Context(), chatID, req.Link)
+	if err != nil {
+		http.Error(w, "database error", 500)
+		return
+	}
+	if !exists {
+		http.Error(w, "subscription not found", 404)
 		return
 	}
 
@@ -237,9 +310,6 @@ func (s *ScrapperServer) handleRemoveLink(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	source := getSourceFromURL(req.Link)
-	metrics.LinksOnTrack.WithLabelValues(source).Dec()
-
 	_ = s.cache.Invalidate(r.Context(), chatID)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -252,4 +322,17 @@ func getSourceFromURL(rawURL string) string {
 		return "unknown"
 	}
 	return u.Host
+}
+
+func (s *ScrapperServer) requireChat(w http.ResponseWriter, r *http.Request, id int64) bool {
+	exists, err := s.repo.ChatExists(r.Context(), id)
+	if err != nil {
+		http.Error(w, "database error", 500)
+		return false
+	}
+	if !exists {
+		http.Error(w, "chat not registered", 404)
+		return false
+	}
+	return true
 }

@@ -2,124 +2,119 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/agent/processor"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/config"
 )
 
-func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+func publish(p *kafka.Producer, topic string, value []byte) error {
+	delivery := make(chan kafka.Event, 1)
+	if err := p.Produce(&kafka.Message{TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny}, Value: value}, delivery); err != nil {
+		return err
+	}
+	select {
+	case event := <-delivery:
+		msg, ok := event.(*kafka.Message)
+		if !ok {
+			return fmt.Errorf("unexpected delivery event: %T", event)
+		}
+		return msg.TopicPartition.Error
+	case <-time.After(15 * time.Second):
+		return fmt.Errorf("Kafka delivery timeout")
+	}
+}
 
+func run() error {
 	cfg, err := config.Load()
 	if err != nil {
-		logger.Error("Не удалось загрузить конфиг", "error", err)
-		os.Exit(1)
+		return err
 	}
-
-	proc := processor.NewProcessor(
-		cfg.AgentStopWords,
-		cfg.AgentExcludedAuthors,
-		cfg.AgentMinLength,
-		cfg.AgentSummaryThreshold,
-		cfg.AgentHFToken,
-		cfg.AgentHighKeywords,
-		cfg.AgentLowKeywords,
-	)
-
-	grouper := processor.NewGrouper(cfg.AgentGroupWindow)
-
-	brokers := strings.Join(cfg.KafkaBrokers, ",")
-
+	proc := processor.NewProcessor(cfg.AgentStopWords, cfg.AgentExcludedAuthors, cfg.AgentMinLength, cfg.AgentSummaryThreshold, cfg.AgentHFToken, cfg.AgentHighKeywords, cfg.AgentLowKeywords)
 	consumer, err := kafka.NewConsumer(&kafka.ConfigMap{
-		"bootstrap.servers": brokers,
-		"group.id":          cfg.AgentGroupID,
-		"auto.offset.reset": "earliest",
+		"bootstrap.servers": strings.Join(cfg.KafkaBrokers, ","), "group.id": cfg.AgentGroupID,
+		"auto.offset.reset": "earliest", "enable.auto.commit": false, "enable.auto.offset.store": false,
 	})
 	if err != nil {
-		logger.Error("Ошибка создания Kafka Consumer", "error", err)
-		os.Exit(1)
+		return err
 	}
 	defer consumer.Close()
-
-	producer, err := kafka.NewProducer(&kafka.ConfigMap{
-		"bootstrap.servers": brokers,
-	})
+	producer, err := kafka.NewProducer(&kafka.ConfigMap{"bootstrap.servers": strings.Join(cfg.KafkaBrokers, ","), "enable.idempotence": true})
 	if err != nil {
-		logger.Error("Ошибка создания Kafka Producer", "error", err)
-		os.Exit(1)
+		return err
 	}
 	defer producer.Close()
-
-	err = consumer.SubscribeTopics([]string{cfg.AgentRawTopic}, nil)
-	if err != nil {
-		logger.Error("Ошибка подписки на топик", "error", err)
-		os.Exit(1)
+	if err := consumer.SubscribeTopics([]string{cfg.AgentRawTopic}, nil); err != nil {
+		return err
 	}
-
-	go func() {
-		for groupedBatch := range grouper.Out() {
-			for _, msg := range groupedBatch {
-				valBytes, err := json.Marshal(msg)
-				if err != nil {
-					logger.Error("Ошибка сериализации", "error", err)
-					continue
-				}
-
-				topic := cfg.AgentProcessedTopic
-				err = producer.Produce(&kafka.Message{
-					TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
-					Value:          valBytes,
-				}, nil)
-				if err != nil {
-					logger.Error("Ошибка отправки в Kafka", "error", err)
-				}
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(signals)
+	var pending []*kafka.Message
+	var updates []processor.ProcessedUpdate
+	deadline := time.Now().Add(cfg.AgentGroupWindow)
+	flush := func() error {
+		for _, update := range processor.GroupUpdates(updates) {
+			payload, err := json.Marshal(update)
+			if err != nil {
+				return err
 			}
-			producer.Flush(5000)
-			logger.Info("Отправлен сгруппированный батч сообщений", "count", len(groupedBatch))
+			if err := publish(producer, cfg.AgentProcessedTopic, payload); err != nil {
+				return err
+			}
 		}
-	}()
-
-	sigchan := make(chan os.Signal, 1)
-	signal.Notify(sigchan, syscall.SIGINT, syscall.SIGTERM)
-
-	logger.Info("AI Agent запущен", slog.String("topic_in", cfg.AgentRawTopic), slog.String("topic_out", cfg.AgentProcessedTopic))
-
-	run := true
-	for run {
+		// Commit only after every output in this batch has a broker acknowledgement.
+		// A crash between publication and commit may replay a batch (at-least-once).
+		for _, message := range pending {
+			if _, err := consumer.CommitMessage(message); err != nil {
+				return err
+			}
+		}
+		pending = nil
+		updates = nil
+		deadline = time.Now().Add(cfg.AgentGroupWindow)
+		return nil
+	}
+	slog.Info("AI Agent started", "input", cfg.AgentRawTopic, "output", cfg.AgentProcessedTopic)
+	for {
 		select {
-		case sig := <-sigchan:
-			logger.Info("Остановка агента по сигналу...", "signal", sig)
-			run = false
+		case <-signals:
+			return flush()
 		default:
-			ev := consumer.Poll(100)
-			if ev == nil {
-				continue
-			}
-
-			switch e := ev.(type) {
-			case *kafka.Message:
-				var raw processor.RawUpdate
-				if err := json.Unmarshal(e.Value, &raw); err != nil {
-					logger.Error("Некорректный формат сообщения", "error", err, "payload", string(e.Value))
-					continue
-				}
-
-				processed := proc.ProcessUpdate(raw)
-				if processed != nil {
-					grouper.Add(*processed)
-				} else {
-					logger.Info("Обновление отфильтровано", "id", raw.ID)
-				}
-
-			case kafka.Error:
-				logger.Error("Ошибка Kafka Consumer", "error", e)
+		}
+		if time.Now().After(deadline) || len(pending) >= cfg.BatchSize {
+			if err := flush(); err != nil {
+				return err
 			}
 		}
+		switch event := consumer.Poll(100).(type) {
+		case *kafka.Message:
+			var raw processor.RawUpdate
+			if err := json.Unmarshal(event.Value, &raw); err != nil || len(raw.TgChatIDs) == 0 || raw.Description == "" {
+				if err := publish(producer, cfg.AgentRawTopic+".dlq", event.Value); err != nil {
+					return err
+				}
+			} else if processed := proc.ProcessUpdate(raw); processed != nil {
+				updates = append(updates, *processed)
+			}
+			pending = append(pending, event)
+		case kafka.Error:
+			slog.Error("Kafka consumer error", "error", event)
+		}
+	}
+}
+
+func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	if err := run(); err != nil {
+		slog.Error("AI Agent stopped", "error", err)
+		os.Exit(1)
 	}
 }

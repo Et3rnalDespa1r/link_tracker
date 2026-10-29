@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"fmt"
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/metrics"
 	"log/slog"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -112,5 +113,9 @@ func (b *Bot) SendMessage(chatID int64, text string) error {
 }
 
 func (b *Bot) SendNotification(ctx context.Context, chatID int64, text string) error {
-	return b.SendMessage(chatID, text)
+	err := b.SendMessage(chatID, text)
+	if err == nil {
+		metrics.SentNotifications.Inc()
+	}
+	return err
 }

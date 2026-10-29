@@ -51,3 +51,21 @@ func TestProcessor_Filtering(t *testing.T) {
 	assert.Nil(t, proc.ProcessUpdate(RawUpdate{Description: "this is spam message long enough"}))
 	assert.NotNil(t, proc.ProcessUpdate(RawUpdate{Description: "this is a valid message long enough"}))
 }
+
+func TestGrouperOverlappingRecipients(t *testing.T) {
+	g := NewGrouper(time.Hour)
+	g.Add(ProcessedUpdate{ID: 1, Description: "first", TgChatIDs: []int64{1, 2}, Priority: PriorityLow})
+	g.Add(ProcessedUpdate{ID: 2, Description: "second", TgChatIDs: []int64{2, 3}, Priority: PriorityHigh})
+	g.flushTimer.Stop()
+	g.flush()
+	result := <-g.Out()
+	assert.Len(t, result, 3)
+	for _, update := range result {
+		assert.Len(t, update.TgChatIDs, 1)
+		if update.TgChatIDs[0] == 2 {
+			assert.Contains(t, update.Description, "1. first")
+			assert.Contains(t, update.Description, "2. second")
+			assert.Equal(t, PriorityHigh, update.Priority)
+		}
+	}
+}

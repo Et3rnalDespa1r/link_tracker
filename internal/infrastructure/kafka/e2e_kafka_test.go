@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,10 +23,13 @@ import (
 )
 
 type MockTelegramBot struct {
+	mu       sync.Mutex
 	Received []string
 }
 
 func (m *MockTelegramBot) SendNotification(ctx context.Context, chatID int64, text string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.Received = append(m.Received, text)
 	return nil
 }
@@ -100,6 +104,8 @@ func TestE2E_ScraperToBot_ViaKafka(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Eventually(t, func() bool {
+		mockTgBot.mu.Lock()
+		defer mockTgBot.mu.Unlock()
 		return len(mockTgBot.Received) > 0
 	}, 20*time.Second, 1*time.Second)
 }

@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -31,19 +32,26 @@ const (
 	ReplyUnknown      = "Неизвестная команда. Воспользуйтесь /help, чтобы посмотреть список доступных команд."
 )
 
+type BotRepository interface {
+	AddLink(context.Context, int64, domain.Link) error
+	RemoveLink(context.Context, int64, string) error
+	GetLinks(context.Context, int64) ([]domain.Link, error)
+	HasLink(context.Context, int64, string) (bool, error)
+}
+
 type MessageSender interface {
 	SendMessage(chatID int64, text string) error
 }
 
 type BotService struct {
-	repo      LinkRepository
+	repo      BotRepository
 	sender    MessageSender
 	states    map[int64]domain.UserState
 	tempLinks map[int64]string
 	logger    *slog.Logger
 }
 
-func NewBotService(repo LinkRepository, sender MessageSender, logger *slog.Logger) *BotService {
+func NewBotService(repo BotRepository, sender MessageSender, logger *slog.Logger) *BotService {
 	return &BotService{
 		repo:      repo,
 		sender:    sender,
@@ -54,15 +62,17 @@ func NewBotService(repo LinkRepository, sender MessageSender, logger *slog.Logge
 }
 
 func (s *BotService) Notify(ctx context.Context, update domain.LinkUpdate) error {
+	var failures []error
 	for _, chatID := range update.TgChatIDs {
 		msg := fmt.Sprintf("🔔 Обновление по ссылке: %s\n%s", update.URL, update.Description)
 		if err := s.sender.SendMessage(chatID, msg); err != nil {
+			failures = append(failures, err)
 			s.logger.Error("Не удалось отправить уведомление", "chat_id", chatID, "error", err)
 		} else {
 			metrics.SentNotifications.Inc()
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }
 
 func (s *BotService) HandleCommand(ctx context.Context, chatID int64, command, args string) string {
@@ -79,6 +89,14 @@ func (s *BotService) HandleCommand(ctx context.Context, chatID int64, command, a
 
 	switch command {
 	case CmdStart:
+		if registrar, ok := s.repo.(interface {
+			RegisterChat(context.Context, int64) error
+		}); ok {
+			if err := registrar.RegisterChat(ctx, chatID); err != nil {
+				s.logger.Error("Chat registration failed", "error", err)
+				return "Сервис временно недоступен. Попробуйте позже."
+			}
+		}
 		return "Добро пожаловать в LinkTracker! Используйте /help для просмотра команд."
 	case CmdHelp:
 		return "Доступные команды:\n/start - Начало работы\n/help - Справка\n/track - Отслеживать ссылку\n/untrack - Перестать отслеживать\n/list - Список ссылок\n/cancel - Отменить текущее действие"
@@ -122,7 +140,7 @@ func (s *BotService) HandleText(ctx context.Context, chatID int64, text string) 
 
 func (s *BotService) processLinkInput(ctx context.Context, chatID int64, text string) string {
 	parsedURL, err := url.ParseRequestURI(text)
-	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
+	if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Host == "" {
 		return ReplyInvalidLink
 	}
 

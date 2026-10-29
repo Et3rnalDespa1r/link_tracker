@@ -3,8 +3,9 @@ package domain
 import "time"
 
 type LinkResponse struct {
-	ID  int64  `json:"id"`
-	URL string `json:"url"`
+	Tags []string `json:"tags"`
+	ID   int64    `json:"id"`
+	URL  string   `json:"url"`
 }
 
 type ListLinksResponse struct {
@@ -13,7 +14,8 @@ type ListLinksResponse struct {
 }
 
 type AddLinkRequest struct {
-	Link string `json:"link"`
+	Tags []string `json:"tags"`
+	Link string   `json:"link"`
 }
 
 type RemoveLinkRequest struct {
@@ -21,6 +23,7 @@ type RemoveLinkRequest struct {
 }
 
 type LinkUpdate struct {
+	Author      string  `json:"author,omitempty" avro:"-"`
 	ID          int64   `json:"id" avro:"id"`
 	URL         string  `json:"url" avro:"url"`
 	Description string  `json:"description" avro:"description"`

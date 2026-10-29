@@ -124,9 +124,10 @@ func TestConsumer_Integration(t *testing.T) {
 		go consumer.Start(ctxCancel)
 		defer consumer.Close()
 
-		producer, _ := scrapperKafka.NewProducer(brokers, topic, mockSR.URL)
+		producer, err := scrapperKafka.NewProducer(brokers, topic, mockSR.URL)
+		require.NoError(t, err)
 		defer producer.Close()
-		_ = producer.SendUpdate(ctx, scrapDomain.LinkUpdate{URL: "https://ok", Description: "Test", TgChatIDs: []int64{123}})
+		require.NoError(t, producer.SendUpdate(ctx, scrapDomain.LinkUpdate{URL: "https://ok", Description: "Test", TgChatIDs: []int64{123}}))
 
 		assert.Eventually(t, func() bool {
 			return mockBot.GetCalls() >= 1
@@ -169,9 +170,10 @@ func TestConsumer_Integration(t *testing.T) {
 		go consumer.Start(ctxCancel)
 		defer consumer.Close()
 
-		producer, _ := scrapperKafka.NewProducer(brokers, topic, mockSR.URL)
+		producer, err := scrapperKafka.NewProducer(brokers, topic, mockSR.URL)
+		require.NoError(t, err)
 		defer producer.Close()
-		_ = producer.SendUpdate(ctx, scrapDomain.LinkUpdate{URL: "https://fail", Description: "Fail", TgChatIDs: []int64{123}})
+		require.NoError(t, producer.SendUpdate(ctx, scrapDomain.LinkUpdate{URL: "https://fail", Description: "Fail", TgChatIDs: []int64{123}}))
 
 		dlqMsg := readFromDLQ(t, dlqTopic)
 		assert.NotEmpty(t, dlqMsg)

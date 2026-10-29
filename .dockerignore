@@ -1,0 +1,11 @@
+.git
+.env
+.env.*
+.idea
+work
+bin
+agent
+bot
+scrapper
+*.out
+.DS_Store

@@ -1,8 +1,10 @@
 package kafka
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -70,39 +72,77 @@ func (c *Consumer) Start(ctx context.Context) {
 				continue
 			}
 
-			if err := c.processMessage(ctx, msg); err != nil {
+			for {
+				err := c.processMessage(ctx, msg)
+				if err == nil {
+					break
+				}
 				c.logger.Error("Failed to process message", "error", err)
-				c.sendToDLQ(ctx, msg)
+				if err = c.sendToDLQ(ctx, msg); err == nil {
+					break
+				}
+				c.logger.Error("DLQ unavailable; retaining offset", "error", err)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(time.Second):
+				}
 			}
-
-			c.reader.CommitMessages(ctx, msg)
+			for {
+				if err := c.reader.CommitMessages(ctx, msg); err == nil {
+					break
+				} else {
+					c.logger.Error("Offset commit failed", "error", err)
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(time.Second):
+				}
+			}
 		}
 	}
 }
 
 func (c *Consumer) processMessage(ctx context.Context, msg kafka.Message) error {
-	if len(msg.Value) < avroHeaderLength || msg.Value[0] != magicByte {
-		return fmt.Errorf("invalid magic byte")
-	}
-
-	schemaID := int(binary.BigEndian.Uint32(msg.Value[magicByteSize:avroHeaderLength]))
-	parsedSchema, err := c.getSchema(schemaID)
-	if err != nil {
-		return err
-	}
-
 	var update domain.LinkUpdate
-	if err := avro.Unmarshal(parsedSchema, msg.Value[avroHeaderLength:], &update); err != nil {
-		return err
+	if bytes.HasPrefix(bytes.TrimSpace(msg.Value), []byte("{")) {
+		if err := json.Unmarshal(msg.Value, &update); err != nil {
+			return err
+		}
+	} else {
+		if len(msg.Value) < avroHeaderLength || msg.Value[0] != magicByte {
+			return fmt.Errorf("invalid magic byte")
+		}
+
+		schemaID := int(binary.BigEndian.Uint32(msg.Value[magicByteSize:avroHeaderLength]))
+		parsedSchema, err := c.getSchema(schemaID)
+		if err != nil {
+			return err
+		}
+
+		if err := avro.Unmarshal(parsedSchema, msg.Value[avroHeaderLength:], &update); err != nil {
+			return err
+		}
+
+	}
+	if update.Description == "" || len(update.TgChatIDs) == 0 {
+		return fmt.Errorf("invalid update")
 	}
 
 	var lastErr error
+	delivered := make(map[int64]bool)
 	for i := 0; i < c.retries; i++ {
 		successCount := 0
 		for _, chatID := range update.TgChatIDs {
+			if delivered[chatID] {
+				successCount++
+				continue
+			}
 			if err := c.bot.SendNotification(ctx, chatID, update.Description); err != nil {
 				lastErr = err
 			} else {
+				delivered[chatID] = true
 				successCount++
 			}
 		}
@@ -111,13 +151,17 @@ func (c *Consumer) processMessage(ctx context.Context, msg kafka.Message) error 
 			return nil
 		}
 
-		time.Sleep(time.Second * time.Duration(i+1))
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second * time.Duration(i+1)):
+		}
 	}
 
 	return fmt.Errorf("retries exhausted: %w", lastErr)
 }
 
-func (c *Consumer) sendToDLQ(ctx context.Context, msg kafka.Message) {
+func (c *Consumer) sendToDLQ(ctx context.Context, msg kafka.Message) error {
 	err := c.dlqWriter.WriteMessages(ctx, kafka.Message{
 		Value: msg.Value,
 		Key:   msg.Key,
@@ -125,6 +169,7 @@ func (c *Consumer) sendToDLQ(ctx context.Context, msg kafka.Message) {
 	if err != nil {
 		c.logger.Error("Failed to send to DLQ", "error", err)
 	}
+	return err
 }
 
 func (c *Consumer) getSchema(id int) (avro.Schema, error) {

@@ -3,7 +3,9 @@ package kafka
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/hamba/avro/v2"
 	"github.com/riferrei/srclient"
@@ -24,6 +26,7 @@ const linkUpdateSchema = `{
 }`
 
 type Producer struct {
+	jsonMode     bool
 	writer       *kafka.Writer
 	srClient     *srclient.SchemaRegistryClient
 	schemaID     int
@@ -32,9 +35,11 @@ type Producer struct {
 
 func NewProducer(brokers []string, topic string, schemaRegistryURL string) (*Producer, error) {
 	w := &kafka.Writer{
-		Addr:     kafka.TCP(brokers...),
-		Topic:    topic,
-		Balancer: &kafka.LeastBytes{},
+		Addr:         kafka.TCP(brokers...),
+		Topic:        topic,
+		Balancer:     &kafka.Hash{},
+		RequiredAcks: kafka.RequireAll,
+		WriteTimeout: 15 * time.Second,
 	}
 
 	srClient := srclient.CreateSchemaRegistryClient(schemaRegistryURL)
@@ -62,6 +67,13 @@ func NewProducer(brokers []string, topic string, schemaRegistryURL string) (*Pro
 }
 
 func (p *Producer) SendUpdate(ctx context.Context, update domain.LinkUpdate) error {
+	if p.jsonMode {
+		payload, err := json.Marshal(update)
+		if err != nil {
+			return err
+		}
+		return p.writer.WriteMessages(ctx, kafka.Message{Key: []byte(fmt.Sprint(update.ID)), Value: payload})
+	}
 	avroBytes, err := avro.Marshal(p.parsedSchema, update)
 	if err != nil {
 		return fmt.Errorf("ошибка сериализации avro: %w", err)
@@ -89,4 +101,8 @@ func (p *Producer) SendUpdate(ctx context.Context, update domain.LinkUpdate) err
 
 func (p *Producer) Close() error {
 	return p.writer.Close()
+}
+
+func NewJSONProducer(brokers []string, topic string) *Producer {
+	return &Producer{jsonMode: true, writer: &kafka.Writer{Addr: kafka.TCP(brokers...), Topic: topic, Balancer: &kafka.Hash{}, RequiredAcks: kafka.RequireAll, WriteTimeout: 10 * time.Second}}
 }
